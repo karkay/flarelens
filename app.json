@@ -1,0 +1,66 @@
+{
+  "expo": {
+    "name": "FlareLens",
+    "slug": "flarelens-eczema-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "flarelens",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.flarelens.eczematracker",
+      "infoPlist": {
+        "NSCameraUsageDescription": "FlareLens uses the camera to photograph foods and beverages so Gemini can identify ingredients linked to eczema flare-ups.",
+        "NSPhotoLibraryUsageDescription": "FlareLens accesses your photo library so you can select meal photos for ingredient analysis.",
+        "NSLocationWhenInUseUsageDescription": "FlareLens uses your location to automatically log local weather, humidity, season, and pollen/allergen levels.",
+        "NSMotionUsageDescription": "FlareLens reads step and motion activity to automatically estimate daily exercise quantities.",
+        "NSHealthShareUsageDescription": "FlareLens optionally reads sleep, workout, and HRV metrics from Apple Health to correlate them with eczema severity.",
+        "UIBackgroundModes": [
+          "fetch",
+          "processing"
+        ]
+      }
+    },
+    "android": {
+      "package": "com.flarelens.eczematracker",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "ACTIVITY_RECOGNITION",
+        "POST_NOTIFICATIONS",
+        "RECEIVE_BOOT_COMPLETED"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow FlareLens to automatically collect weather, humidity, and local allergen levels."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow FlareLens to select food photos for Gemini ingredient analysis.",
+          "cameraPermission": "Allow FlareLens to capture food photos for Gemini ingredient analysis."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#1F6F66"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

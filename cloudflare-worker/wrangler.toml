@@ -1,0 +1,8 @@
+name = "flarelens-gemini-proxy"
+main = "src/worker.js"
+compatibility_date = "2026-11-01"
+
+[vars]
+# Optional: restrict CORS strictly to your GitHub Pages origin, e.g.:
+# ALLOWED_ORIGIN = "https://yourusername.github.io"
+ALLOWED_ORIGIN = ""
