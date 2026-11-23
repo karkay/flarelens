@@ -29,8 +29,8 @@ const DEPRECATED_MODELS = new Set([
 const RETRIABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SESSION_TTL_SEC = 12 * 60 * 60; // 12 hours
 
-const FOOD_PROMPT = `You are a dermatology nutrition assistant helping a patient with atopic dermatitis (eczema) track food and beverage triggers.
-Identify the food or beverage shown (or described) and list ALL typical & hidden ingredients (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, tree nuts, peanuts, shellfish, nightshades/tomato, citrus, histamine-rich/fermented items, caffeine, alcohol, refined sugar, cooking oils, additives).
+const FOOD_PROMPT = `You are a health and nutrition assistant helping a user track food and beverage triggers for symptoms such as eczema, stomach pain/GI issues, acne, migraines, and allergies.
+Identify the food or beverage shown (or described) and list ALL typical & hidden ingredients (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, tree nuts, peanuts, shellfish, nightshades/tomato, citrus, high-FODMAP/garlic/onion, histamine-rich/fermented items, caffeine, alcohol, refined sugar, spicy peppers, cooking oils, additives).
 Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Gluten", "Tomato (Nightshade)", "Soy", "Eggs").
 Return ONLY valid JSON matching the schema.`;
 

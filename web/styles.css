@@ -748,3 +748,83 @@ table.lag-table tr.best-row { background: var(--primary-light); font-weight: 800
   gap: 7px;
   margin-top: 10px;
 }
+
+/* Multi-Condition Landing Cards & Switcher */
+.cond-card {
+  background: var(--surface-elev);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--primary);
+  border-radius: 14px;
+  padding: 12px 13px;
+  margin-bottom: 10px;
+}
+
+.cond-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.cond-name {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.cond-signal {
+  font-size: 11px;
+  color: var(--text-sec);
+  margin-top: 2px;
+}
+
+.cond-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-light);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.cond-switcher {
+  display: flex;
+  gap: 7px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+  margin-bottom: 10px;
+  scrollbar-width: none;
+}
+.cond-switcher::-webkit-scrollbar { display: none; }
+
+.cond-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.cond-pill.active {
+  color: #fff;
+  border-color: transparent;
+}

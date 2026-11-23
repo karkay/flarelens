@@ -51,8 +51,23 @@ export type BodyArea =
   | 'torso'
   | 'scalp';
 
+export interface TrackedCondition {
+  id: string;
+  name: string;
+  icon: string;
+  color: string;
+  category: string;
+  subMetrics: string[];
+  areas?: string[];
+  isActive: boolean;
+  isCustom: boolean;
+  createdAt: string;
+}
+
 export interface EczemaLogEntry {
   id: string;
+  /** Condition being tracked (defaults to 'cond_eczema' for backward compatibility) */
+  conditionId?: string;
   /** ISO 8601 timestamp */
   timestamp: string;
   /** YYYY-MM-DD local date key */

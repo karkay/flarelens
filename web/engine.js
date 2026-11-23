@@ -1,6 +1,75 @@
 (function (global) {
   'use strict';
 
+  const STARTER_CONDITIONS = [
+    {
+      id: 'cond_eczema',
+      name: 'Eczema',
+      icon: '🩹',
+      color: '#D1493E',
+      category: 'Skin',
+      subMetrics: ['Itch Intensity', 'Redness / Inflammation', 'Skin Dryness'],
+      areas: ['Hands', 'Wrists', 'Inner Elbows', 'Neck', 'Face / Eyelids', 'Behind Knees', 'Ankles', 'Torso', 'Scalp'],
+      defaultActive: true,
+      isCustom: false,
+    },
+    {
+      id: 'cond_stomach_pain',
+      name: 'Stomach Pain',
+      icon: '🤢',
+      color: '#C97B1A',
+      category: 'Digestive',
+      subMetrics: ['Cramping', 'Bloating', 'Acid / Nausea'],
+      areas: ['Upper Abdomen', 'Lower Abdomen', 'Left Side', 'Right Side', 'Chest / Reflux'],
+      defaultActive: true,
+      isCustom: false,
+    },
+    {
+      id: 'cond_acne',
+      name: 'Acne',
+      icon: '✨',
+      color: '#7A52B3',
+      category: 'Skin',
+      subMetrics: ['Breakouts', 'Inflammation', 'Oiliness'],
+      areas: ['Forehead', 'Cheeks', 'Jawline / Chin', 'Nose', 'Back / Shoulders', 'Chest'],
+      defaultActive: true,
+      isCustom: false,
+    },
+    {
+      id: 'cond_migraine',
+      name: 'Migraines',
+      icon: '🧠',
+      color: '#3B78B8',
+      category: 'Neurological',
+      subMetrics: ['Head Pain', 'Light / Sound Sensitivity', 'Brain Fog'],
+      areas: ['Temples', 'Forehead', 'Behind Eyes', 'Back of Head', 'Neck'],
+      defaultActive: false,
+      isCustom: false,
+    },
+    {
+      id: 'cond_allergies',
+      name: 'Allergies / Sinus',
+      icon: '🤧',
+      color: '#248A67',
+      category: 'Respiratory',
+      subMetrics: ['Congestion', 'Sneezing', 'Itchy Eyes'],
+      areas: ['Sinuses', 'Eyes', 'Throat', 'Chest'],
+      defaultActive: false,
+      isCustom: false,
+    },
+    {
+      id: 'cond_joint_pain',
+      name: 'Joint Pain',
+      icon: '🦴',
+      color: '#5C6F68',
+      category: 'Musculoskeletal',
+      subMetrics: ['Stiffness', 'Aching', 'Swelling'],
+      areas: ['Hands / Fingers', 'Knees', 'Lower Back', 'Shoulders', 'Hips', 'Ankles'],
+      defaultActive: false,
+      isCustom: false,
+    },
+  ];
+
   const STARTER_VARIABLES = [
     { id: 'var_humidity', name: 'Humidity', category: 'environment', valueType: 'numeric', unit: '%', autoCollected: true, isCustom: false, isActive: true },
     { id: 'var_temperature', name: 'Temperature', category: 'environment', valueType: 'numeric', unit: '°C', autoCollected: true, isCustom: false, isActive: true },
@@ -492,7 +561,7 @@
     return { ...next, countdown: h > 0 ? `in ${h}h ${m}m` : `in ${m}m` };
   }
 
-  function generateInsightsReport({ eczemaLogs, measurements, variableDefinitions, slot, scheduledForLabel, now = new Date() }) {
+  function generateInsightsReport({ eczemaLogs, measurements, variableDefinitions, slot, scheduledForLabel, conditionName = 'Symptom', now = new Date() }) {
     const allResults = analyzeCorrelations(eczemaLogs, measurements, variableDefinitions);
     const topTriggers = allResults.filter((r) => r.direction === 'trigger' && Math.abs(r.bestLag.score) >= 0.28).slice(0, 6);
     const topProtective = allResults.filter((r) => r.direction === 'protective' && Math.abs(r.bestLag.score) >= 0.28).slice(0, 4);
@@ -516,25 +585,26 @@
       const hoursUntil = Math.round(trig.typicalLagHours - hoursSince);
       if (hoursUntil >= -12 && hoursUntil <= 60) {
         activeAlerts.push({
+          conditionName,
           variableId: trig.variableId,
           variableName: trig.variableName,
           expectedPeakWindowLabel: hoursUntil <= 0 ? 'Peak reaction window active now' : `Expected peak in ~${formatLagHours(hoursUntil)}`,
           riskLevel: trig.confidence === 'high' ? 'high' : 'moderate',
-          reason: `Exposed ${formatLagHours(hoursSince)} ago; historically peaks ~${formatLagHours(trig.typicalLagHours)} after exposure (r = +${trig.bestLag.score.toFixed(2)}).`,
+          reason: `Exposed ${formatLagHours(hoursSince)} ago; ${conditionName} historically peaks ~${formatLagHours(trig.typicalLagHours)} after exposure (r = +${trig.bestLag.score.toFixed(2)}).`,
         });
       }
     }
 
-    const slotTitle = slot === 'morning' ? 'Morning Skin Forecast' : slot === 'evening' ? 'Evening Correlation Digest' : 'On-Demand Analysis';
+    const slotTitle = slot === 'morning' ? `Morning ${conditionName} Forecast` : slot === 'evening' ? `Evening ${conditionName} Digest` : `${conditionName} Analysis`;
     const lead = topTriggers[0];
-    const headline = lead ? `${slotTitle}: ${lead.variableName} is your strongest signal (${lead.bestLag.shortLabel})` : `${slotTitle}: Log daily to uncover triggers`;
+    const headline = lead ? `${slotTitle}: ${lead.variableName} is your strongest signal (${lead.bestLag.shortLabel})` : `${slotTitle}: Log daily to uncover ${conditionName.toLowerCase()} triggers`;
 
     const summaryParts = [];
     if (topTriggers.length) {
-      summaryParts.push('Top suspected drivers: ' + topTriggers.slice(0, 3).map((t) => `${t.variableName} (${t.bestLag.label}, r=+${t.bestLag.score.toFixed(2)})`).join(', ') + '.');
+      summaryParts.push(`Top suspected ${conditionName.toLowerCase()} drivers: ` + topTriggers.slice(0, 3).map((t) => `${t.variableName} (${t.bestLag.label}, r=+${t.bestLag.score.toFixed(2)})`).join(', ') + '.');
     }
     if (topProtective.length) {
-      summaryParts.push(`Protective factor: higher ${topProtective[0].variableName} correlates with calmer skin (r=${topProtective[0].bestLag.score.toFixed(2)}).`);
+      summaryParts.push(`Protective factor: higher ${topProtective[0].variableName} correlates with milder ${conditionName.toLowerCase()} (r=${topProtective[0].bestLag.score.toFixed(2)}).`);
     }
     if (activeAlerts.length) {
       summaryParts.push(`${activeAlerts.length} active exposure window(s) to watch over the next 24–48h.`);
@@ -545,9 +615,10 @@
       generatedAt: now.toISOString(),
       dateKey: toDateKey(now),
       slot,
+      conditionName,
       scheduledForLabel,
       headline,
-      narrativeSummary: summaryParts.join(' ') || 'Keep logging daily to build personal trigger insights.',
+      narrativeSummary: summaryParts.join(' ') || `Keep logging ${conditionName.toLowerCase()} daily to uncover personal trigger patterns.`,
       topTriggers,
       topProtective,
       allResults,
@@ -615,12 +686,59 @@
       const areas = pmSev >= 6 ? ['hands', 'inner_elbows', 'neck'] : pmSev >= 4 ? ['hands', 'wrists'] : ['hands'];
 
       const amTs = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 8, 30, 0).toISOString();
-      eczemaLogs.push({ id: `d_am_${i}`, timestamp: amTs, dateKey: dk, severity: amSev, itchLevel: Math.min(10, amSev + 1), rednessLevel: Math.max(0, amSev - 1), drynessLevel: amSev, affectedAreas: areas, timeOfDay: 'morning', season });
+      eczemaLogs.push({ id: `d_am_${i}`, conditionId: 'cond_eczema', timestamp: amTs, dateKey: dk, severity: amSev, itchLevel: Math.min(10, amSev + 1), rednessLevel: Math.max(0, amSev - 1), drynessLevel: amSev, affectedAreas: areas, timeOfDay: 'morning', season });
 
       if (i < days - 1 || refDate.getHours() >= 19) {
         const pmTs = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 19, 30, 0).toISOString();
-        eczemaLogs.push({ id: `d_pm_${i}`, timestamp: pmTs, dateKey: dk, severity: pmSev, itchLevel: Math.min(10, pmSev + 1), rednessLevel: pmSev, drynessLevel: pmSev, affectedAreas: areas, timeOfDay: 'evening', season, notes: pmSev >= 7 ? 'Evening flare-up; applied moisturizer.' : undefined });
+        eczemaLogs.push({ id: `d_pm_${i}`, conditionId: 'cond_eczema', timestamp: pmTs, dateKey: dk, severity: pmSev, itchLevel: Math.min(10, pmSev + 1), rednessLevel: pmSev, drynessLevel: pmSev, affectedAreas: areas, timeOfDay: 'evening', season, notes: pmSev >= 7 ? 'Evening flare-up; applied moisturizer.' : undefined });
       }
+
+      // Realistic Stomach Pain demo logs: reacts same-day (~4h) to Dairy & Tomato/Acid + high Stress
+      const rawStomach =
+        1.1 +
+        (dairyDays.has(i) ? 4.2 : 0) +
+        (tomatoDays.has(i) ? 2.6 : 0) +
+        (stressS[i] >= 7 ? 1.8 : 0) +
+        noise(i, 21) * 0.8;
+      const stomachSev = Math.max(0, Math.min(10, Math.round(rawStomach)));
+      const giTs = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 17, 15, 0).toISOString();
+      eczemaLogs.push({
+        id: `d_gi_${i}`,
+        conditionId: 'cond_stomach_pain',
+        timestamp: giTs,
+        dateKey: dk,
+        severity: stomachSev,
+        itchLevel: stomachSev,
+        rednessLevel: Math.max(0, stomachSev - 1),
+        drynessLevel: Math.max(0, stomachSev - 2),
+        affectedAreas: stomachSev >= 5 ? ['Upper Abdomen', 'Lower Abdomen'] : ['Upper Abdomen'],
+        timeOfDay: 'evening',
+        season,
+        notes: stomachSev >= 6 ? 'Cramping & bloating a few hours after meal.' : undefined,
+      });
+
+      // Realistic Acne demo logs: delayed ~48h after Dairy + 3-day cumulative Stress + short sleep
+      const rawAcne =
+        1.4 +
+        (dairyDays.has(i - 2) ? 3.5 : 0) +
+        (s3 > 6.5 ? 2.4 : s3 > 5 ? 0.9 : 0) +
+        (sleepS[i - 1] !== undefined && sleepS[i - 1] < 6.2 ? 1.5 : 0) +
+        noise(i, 22) * 0.7;
+      const acneSev = Math.max(0, Math.min(10, Math.round(rawAcne)));
+      eczemaLogs.push({
+        id: `d_acne_${i}`,
+        conditionId: 'cond_acne',
+        timestamp: amTs,
+        dateKey: dk,
+        severity: acneSev,
+        itchLevel: acneSev,
+        rednessLevel: acneSev,
+        drynessLevel: Math.min(10, acneSev + 1),
+        affectedAreas: acneSev >= 5 ? ['Jawline / Chin', 'Cheeks'] : ['Forehead'],
+        timeOfDay: 'morning',
+        season,
+        notes: acneSev >= 6 ? 'New inflammatory breakouts along jawline.' : undefined,
+      });
 
       const envTs = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate(), 10, 0, 0).toISOString();
       measurements.push(
@@ -1123,8 +1241,8 @@
       };
     }
 
-    const prompt = `You are a dermatology nutrition assistant helping a patient with eczema track food & beverage triggers.
-Identify the food or beverage and list ALL typical & hidden ingredients (dairy/butter/cheese, wheat/gluten, soy, eggs, nuts, nightshades/tomato, shellfish, citrus, histamine-rich items, caffeine, alcohol, refined sugar, oils).
+    const prompt = `You are a health & nutrition assistant helping a user track food and beverage triggers for symptoms like eczema, stomach pain/GI issues, acne, migraines, and allergies.
+Identify the food or beverage and list ALL typical & hidden ingredients (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, nuts, nightshades/tomato, shellfish, citrus, high-FODMAP/garlic/onion, histamine-rich/fermented items, caffeine, alcohol, refined sugar, spicy peppers, seed/cooking oils).
 Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Gluten", "Tomato (Nightshade)", "Soy", "Eggs"). Return ONLY valid JSON.`;
 
     const parts = [{ text: prompt }];
@@ -1227,6 +1345,7 @@ Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Glute
   }
 
   global.FlareEngine = {
+    STARTER_CONDITIONS,
     STARTER_VARIABLES,
     BODY_AREAS,
     DEFAULT_GEMINI_MODEL,

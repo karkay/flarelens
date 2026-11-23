@@ -103,18 +103,18 @@
       tab: 'today',
       icon: '👋',
       title: 'Welcome to FlareLens',
-      subtitle: 'Step 1 of 6 · Finding your personal eczema triggers',
+      subtitle: 'Step 1 of 6 · Track any symptom & find your triggers',
       body:
-        'Eczema flare-ups can strike within hours—or build up quietly over 2 to 4 days. FlareLens logs your daily severity alongside automatically synced weather, humidity, local allergens, food ingredients, sleep, wearables—and lets you create, log, and track your own custom triggers (like soaps, detergents, fabrics, or routines) to reveal what drives your flares and how long reactions take.',
-      tip: 'A realistic 21-day demo dataset is pre-loaded so you can explore every chart right away. Turn it off anytime in Settings.',
+        'Symptoms like eczema, stomach pain, acne, or migraines can flare within hours—or build up quietly over 2 to 4 days. FlareLens lets you track multiple health issues at once from one landing page, alongside auto-synced weather, allergens, food ingredients, sleep, wearables—and lets you create, log, and track your own custom conditions and custom triggers.',
+      tip: 'A realistic 21-day demo dataset is pre-loaded for Eczema, Stomach Pain, and Acne so you can explore multi-issue correlations right away. Turn it off anytime in Settings.',
     },
     {
       tab: 'today',
-      icon: '📈',
-      title: 'Daily Check-Ins & Auto Sensors',
-      subtitle: 'Step 2 of 6 · Today tab',
+      icon: '🏠',
+      title: 'Multi-Issue Hub & Quick Check-In',
+      subtitle: 'Step 2 of 6 · Home landing page',
       body:
-        'Tap 0–10 to log your overall severity, itch, redness, dryness, and affected body areas. Tap "Sync Live" to automatically pull local temperature, humidity, UV, and pollen/AQI from your location—and add any custom variables (like laundry detergent or hot showers).',
+        'Track multiple conditions side by side! Tap 0–10 on any condition card and hit "Log All" to save multiple issues at once (with automatic live weather, humidity & pollen sync), or tap "+ Add Condition" to track anything else like migraines, bloating, or joint pain.',
       tip: 'Log both calm days (0–2) and flare days (6–10). Calm days give the correlation engine your baseline!',
     },
     {

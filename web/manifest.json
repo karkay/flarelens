@@ -1,10 +1,10 @@
 {
-  "name": "FlareLens — Eczema Trigger & Correlation Tracker",
+  "name": "FlareLens — Health & Symptom Trigger Tracker",
   "short_name": "FlareLens",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "background_color": "#F6F7F5",
   "theme_color": "#1B6B63",
-  "description": "Track daily eczema severity, auto-collect weather & allergens, scan food with Gemini Vision, and uncover immediate & multi-day correlations."
+  "description": "Track multiple symptoms (eczema, stomach pain, acne, migraines & custom conditions), auto-collect environment & wearable data, scan food with Gemini, and uncover immediate & multi-day correlations."
 }

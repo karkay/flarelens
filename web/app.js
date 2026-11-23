@@ -43,6 +43,9 @@
           userMeasurements: parsed.userMeasurements || [],
           userFoodEntries: parsed.userFoodEntries || [],
           userCustomVariables: parsed.userCustomVariables || [],
+          userConditions: Array.isArray(parsed.userConditions) && parsed.userConditions.length
+            ? parsed.userConditions
+            : E.STARTER_CONDITIONS.filter((c) => c.defaultActive).map((c) => ({ ...c, isActive: true })),
           reportHistory: parsed.reportHistory || [],
           lastMetadata: parsed.lastMetadata || null,
           settings: mergedSettings,
@@ -54,6 +57,7 @@
       userMeasurements: [],
       userFoodEntries: [],
       userCustomVariables: [],
+      userConditions: E.STARTER_CONDITIONS.filter((c) => c.defaultActive).map((c) => ({ ...c, isActive: true })),
       reportHistory: [],
       lastMetadata: null,
       settings: { ...DEFAULT_SETTINGS },
@@ -64,8 +68,10 @@
     ...loadPersisted(),
     demo: E.buildDemoDataset(new Date()),
     activeTab: 'today',
+    activeConditionId: 'cond_eczema',
     // Today form state
     form: {
+      conditionSeverities: { cond_eczema: 3, cond_stomach_pain: 2, cond_acne: 2 },
       severity: 3,
       itch: 3,
       redness: 2,
@@ -117,6 +123,7 @@
           userMeasurements: state.userMeasurements,
           userFoodEntries: state.userFoodEntries,
           userCustomVariables: state.userCustomVariables,
+          userConditions: state.userConditions,
           reportHistory: state.reportHistory.slice(0, 30),
           lastMetadata: state.lastMetadata,
           settings: safeSettings,
@@ -168,11 +175,24 @@
     }
   }
 
-  function getActiveData() {
+  function getActiveData(conditionIdOverride) {
     const useDemo = state.settings.useDemoData;
-    const eczemaLogs = (useDemo ? [...state.userEczemaLogs, ...state.demo.eczemaLogs] : [...state.userEczemaLogs]).sort(
-      (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
-    );
+    const conditions = (state.userConditions || []).filter((c) => c.isActive !== false);
+    const activeConditions = conditions.length ? conditions : [{ ...E.STARTER_CONDITIONS[0], isActive: true }];
+
+    let targetCondId = conditionIdOverride || state.activeConditionId;
+    if (!activeConditions.some((c) => c.id === targetCondId)) {
+      targetCondId = activeConditions[0].id;
+      state.activeConditionId = targetCondId;
+    }
+    const activeCondition = activeConditions.find((c) => c.id === targetCondId) || activeConditions[0];
+
+    const allSymptomLogs = (useDemo ? [...state.userEczemaLogs, ...state.demo.eczemaLogs] : [...state.userEczemaLogs])
+      .map((l) => ({ ...l, conditionId: l.conditionId || 'cond_eczema' }))
+      .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+    const eczemaLogs = allSymptomLogs.filter((l) => l.conditionId === activeCondition.id);
+
     const measurements = (useDemo ? [...state.userMeasurements, ...state.demo.measurements] : [...state.userMeasurements]).sort(
       (a, b) => new Date(b.timestamp) - new Date(a.timestamp)
     );
@@ -184,8 +204,36 @@
       ? [...state.userCustomVariables, ...state.demo.customVariables.filter((v) => !customIds.has(v.id))]
       : [...state.userCustomVariables];
     const allVariables = [...E.STARTER_VARIABLES, ...customVariables];
-    const correlations = E.analyzeCorrelations(eczemaLogs, measurements, allVariables);
-    return { eczemaLogs, measurements, foodEntries, customVariables, allVariables, correlations };
+
+    const correlationsByCondition = {};
+    activeConditions.forEach((c) => {
+      const cLogs = allSymptomLogs.filter((l) => l.conditionId === c.id);
+      correlationsByCondition[c.id] = E.analyzeCorrelations(cLogs, measurements, allVariables);
+    });
+
+    const correlations = correlationsByCondition[activeCondition.id] || [];
+    return {
+      conditions: activeConditions,
+      activeCondition,
+      allSymptomLogs,
+      eczemaLogs,
+      measurements,
+      foodEntries,
+      customVariables,
+      allVariables,
+      correlationsByCondition,
+      correlations,
+    };
+  }
+
+  function renderConditionSwitcher(data) {
+    return `<div class="cond-switcher">
+      ${data.conditions.map((c) => {
+        const active = c.id === data.activeCondition.id;
+        return `<button class="cond-pill ${active ? 'active' : ''}" data-switch-cond="${esc(c.id)}" style="${active ? `background:${c.color || '#1B6B63'}` : ''}">${c.icon || '🩺'} ${esc(c.name)}</button>`;
+      }).join('')}
+      <button class="cond-pill" id="open-manage-conds-btn" style="border-style:dashed;color:var(--primary)">+ Add Issue</button>
+    </div>`;
   }
 
   function ensureScheduledInsightsReady() {
@@ -198,6 +246,7 @@
         eczemaLogs: data.eczemaLogs,
         measurements: data.measurements,
         variableDefinitions: data.allVariables,
+        conditionName: data.activeCondition.name,
         slot: slotDesc.slot,
         scheduledForLabel: slotDesc.label,
         now,
@@ -370,7 +419,7 @@
     return `
       <div class="row-between" style="margin-bottom:6px;flex-wrap:wrap">
         <div class="wrap" style="font-size:11px;font-weight:600;color:var(--text-sec)">
-          <span><b style="color:#D1493E">●</b> Eczema Severity</span>
+          <span><b style="color:#D1493E">●</b> Symptom Severity</span>
           <span><b style="color:#3B78B8">●</b> ${isBin ? 'Exposure Time' : esc(result.variableName)}</span>
           ${showCumulative ? '<span><b style="color:#7A52B3">●</b> 3d Build-Up</span>' : ''}
         </div>
@@ -404,7 +453,7 @@
   function renderToday(data) {
     const now = new Date();
     const todayKey = E.toDateKey(now);
-    const todaysLogs = data.eczemaLogs.filter((l) => l.dateKey === todayKey);
+    const todaysLogs = data.allSymptomLogs.filter((l) => l.dateKey === todayKey);
     const findVal = (id) => (data.measurements.find((m) => m.variableId === id) || {}).numericValue;
     const lm = state.lastMetadata || {};
     const hum = lm.humidityPct ?? findVal('var_humidity');
@@ -412,9 +461,42 @@
     const pol = lm.pollenIndex ?? findVal('var_local_allergens');
     const exe = findVal('var_exercise');
 
-    const areaChips = E.BODY_AREAS.map((a) => {
-      const act = state.form.areas.includes(a.id);
-      return `<button class="chip ${act ? 'active' : ''}" data-area="${a.id}">${a.label}</button>`;
+    const condMap = new Map(data.conditions.map((c) => [c.id, c]));
+
+    const conditionCardsHtml = data.conditions.map((cond) => {
+      const val = state.form.conditionSeverities[cond.id] !== undefined ? state.form.conditionSeverities[cond.id] : 2;
+      const condCorrs = data.correlationsByCondition[cond.id] || [];
+      const topTrig = condCorrs.find((r) => r.direction === 'trigger' && Math.abs(r.bestLag.score) >= 0.25);
+      const latestLog = data.allSymptomLogs.find((l) => l.conditionId === cond.id);
+      const signalText = topTrig
+        ? `Top signal: ${topTrig.variableName} (+${topTrig.bestLag.score.toFixed(2)} · ${topTrig.bestLag.shortLabel})`
+        : latestLog
+        ? `Last logged: ${latestLog.severity}/10 (${severityLabel(latestLog.severity)})`
+        : 'Ready to track — log daily to detect triggers';
+
+      let pills = '';
+      for (let i = 0; i <= 10; i++) {
+        const sel = i === val;
+        pills += `<button class="step-pill ${sel ? 'selected' : ''}" data-cond-sev="${esc(cond.id)}" data-val="${i}" style="${sel ? `background:${severityColor(i)}` : ''}">${i}</button>`;
+      }
+
+      return `<div class="cond-card" style="border-left-color:${cond.color || '#1B6B63'}">
+        <div class="cond-card-top">
+          <div style="flex:1">
+            <div class="cond-name">${cond.icon || '🩺'} ${esc(cond.name)} <span class="badge badge-neutral" style="margin-left:4px">${esc(cond.category || 'Symptom')}</span></div>
+            <div class="cond-signal">${esc(signalText)}</div>
+          </div>
+          <div style="text-align:right">
+            <span style="font-size:15px;font-weight:800;color:${severityColor(val)}">${val}/10</span>
+            <div style="font-size:10.5px;color:var(--text-muted)">${severityLabel(val)}</div>
+          </div>
+        </div>
+        <div class="pill-row">${pills}</div>
+        <div class="cond-actions">
+          <button class="link-btn" data-detail-cond="${esc(cond.id)}">✎ Detailed Log</button>
+          <button class="link-btn" data-goto-metrics="${esc(cond.id)}">Correlations →</button>
+        </div>
+      </div>`;
     }).join('');
 
     const customHtml = data.customVariables.length
@@ -446,6 +528,19 @@
         </div>
         <button class="btn btn-primary btn-sm" id="goto-food-btn">📷 Scan Food</button>
       </div>
+
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Your Tracked Conditions (${data.conditions.length})</h2>
+            <p class="card-sub">Log multiple issues at once—auto-syncs live weather &amp; pollen on save.</p>
+          </div>
+          <button class="btn btn-primary btn-sm" id="open-manage-conds-btn">+ Add Issue</button>
+        </div>
+        ${conditionCardsHtml}
+        <textarea class="input" id="eczema-notes" rows="2" placeholder="Optional note for this check-in (e.g., after lunch, high stress)...">${esc(state.form.notes)}</textarea>
+        <button class="btn btn-primary" id="save-all-conds-btn" style="margin-top:10px">✓ Save Check-In for All ${data.conditions.length} Conditions</button>
+      </section>
 
       <section class="card">
         <div class="card-header">
@@ -488,27 +583,10 @@
       <section class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">Log Eczema Severity</h2>
-            <p class="card-sub">Log anytime — timestamps measure exact exposure-to-flare lag.</p>
+            <h2 class="card-title">Daily Lifestyle &amp; Custom Triggers</h2>
+            <p class="card-sub">Stress, sleep, screen time, exercise &amp; your custom variables.</p>
           </div>
-        </div>
-        ${renderScalePills('severity', 'Overall Eczema Severity', state.form.severity, 0, 10, true)}
-        ${renderScalePills('itch', 'Itch Intensity', state.form.itch, 0, 10, true)}
-        ${renderScalePills('redness', 'Redness / Inflammation', state.form.redness, 0, 10, true)}
-        ${renderScalePills('dryness', 'Skin Dryness', state.form.dryness, 0, 10, false)}
-        <label class="field-label">Affected Body Areas</label>
-        <div class="wrap" style="margin-bottom:10px">${areaChips}</div>
-        <textarea class="input" id="eczema-notes" rows="2" placeholder="Optional notes (e.g., flared after lunch, itchy wrists)...">${esc(state.form.notes)}</textarea>
-        <button class="btn btn-primary" id="save-eczema-btn" style="margin-top:10px">✓ Save Eczema Check-In</button>
-      </section>
-
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Daily Lifestyle & Custom Variables</h2>
-            <p class="card-sub">Stress, sleep, screen time, exercise & your custom triggers.</p>
-          </div>
-          <button class="btn btn-secondary btn-sm" id="open-add-var-btn">+ Add Variable</button>
+          <button class="btn btn-secondary btn-sm" id="open-add-var-btn">+ Add Trigger</button>
         </div>
         ${renderScalePills('stress', 'Stress Level', state.form.stress, 1, 10, false)}
         ${renderScalePills('sleepQuality', 'Sleep Quality', state.form.sleepQuality, 1, 10, false)}
@@ -523,15 +601,17 @@
 
       <section class="card">
         <div class="card-header"><div><h2 class="card-title">Today's Check-Ins (${todaysLogs.length})</h2></div></div>
-        ${todaysLogs.length === 0 ? '<p class="card-sub">No check-ins logged today yet.</p>' : todaysLogs.map((l) => `
-          <div class="row divider-row">
+        ${todaysLogs.length === 0 ? '<p class="card-sub">No check-ins logged today yet.</p>' : todaysLogs.slice(0, 12).map((l) => {
+          const c = condMap.get(l.conditionId) || { icon: '🩺', name: 'Symptom' };
+          return `<div class="row divider-row">
             <div class="sev-circle" style="background:${severityColor(l.severity)}">${l.severity}</div>
             <div style="flex:1">
-              <div style="font-size:13.5px;font-weight:700">${severityLabel(l.severity)} · ${new Date(l.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
-              <div style="font-size:12px;color:var(--text-sec)">Itch ${l.itchLevel}/10 · ${(l.affectedAreas || []).map((a) => a.replace('_', ' ')).join(', ')}</div>
+              <div style="font-size:13.5px;font-weight:700">${c.icon} ${esc(c.name)} · ${severityLabel(l.severity)} · ${new Date(l.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
+              ${l.affectedAreas && l.affectedAreas.length ? `<div style="font-size:12px;color:var(--text-sec)">${l.affectedAreas.map((a) => String(a).replace(/_/g, ' ')).join(', ')}</div>` : ''}
               ${l.notes ? `<div style="font-size:11.5px;color:var(--text-muted);font-style:italic">${esc(l.notes)}</div>` : ''}
             </div>
-          </div>`).join('')}
+          </div>`;
+        }).join('')}
       </section>`;
   }
 
@@ -659,6 +739,8 @@
     ];
 
     return `
+      ${renderConditionSwitcher(data)}
+
       <div class="grid-4">
         <div class="stat-box"><div class="stat-val">${res.length}</div><div class="stat-lbl">Variables</div></div>
         <div class="stat-box"><div class="stat-val" style="color:var(--trigger)">${triggers}</div><div class="stat-lbl">Triggers (+)</div></div>
@@ -666,7 +748,7 @@
         <div class="stat-box"><div class="stat-val" style="color:var(--cumulative)">${delayed}</div><div class="stat-lbl">Delayed / Build-Up</div></div>
       </div>
 
-      <button class="btn btn-secondary" id="open-add-var-btn" style="margin-bottom:12px">+ Add Custom Tracking Variable</button>
+      <button class="btn btn-secondary" id="open-add-var-btn" style="margin-bottom:12px">+ Add Custom Trigger Variable</button>
 
       <div class="scroll-x">
         ${catTabs.map(([id, lbl]) => `<button class="chip chip-solid ${state.metricsCategory === id ? 'active' : ''}" data-mcat="${id}">${lbl}</button>`).join('')}
@@ -726,41 +808,68 @@
       }).join('') || '<section class="card"><p class="card-sub">No matching variables yet.</p></section>'}`;
   }
 
-  function renderInsights() {
-    const activeReport = (state.selectedReportId && state.reportHistory.find((r) => r.id === state.selectedReportId)) || state.reportHistory[0];
+  function renderInsights(data) {
+    const cond = data.activeCondition;
+    const slotDesc = E.getMostRecentScheduledSlot(state.settings, new Date());
+    const activeReport = E.generateInsightsReport({
+      eczemaLogs: data.eczemaLogs,
+      measurements: data.measurements,
+      variableDefinitions: data.allVariables,
+      conditionName: cond.name,
+      slot: slotDesc.slot,
+      scheduledForLabel: slotDesc.label,
+      now: new Date(),
+    });
     const nextRun = E.getNextScheduledRun(state.settings);
-    const cands = activeReport ? [...activeReport.topTriggers, ...activeReport.topProtective] : [];
-    const list = cands.length ? cands : (activeReport ? activeReport.allResults.slice(0, 5) : []);
+    const cands = [...activeReport.topTriggers, ...activeReport.topProtective];
+    const list = cands.length ? cands : activeReport.allResults.slice(0, 5);
     const activeVar = (state.selectedInsightVarId && list.find((v) => v.variableId === state.selectedInsightVarId)) || list[0];
 
-    const genStr = activeReport ? new Date(activeReport.generatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
+    // Cross-condition active watchlist across ALL tracked conditions
+    const crossAlerts = [];
+    data.conditions.forEach((c) => {
+      const cRep = E.generateInsightsReport({
+        eczemaLogs: data.allSymptomLogs.filter((l) => l.conditionId === c.id),
+        measurements: data.measurements,
+        variableDefinitions: data.allVariables,
+        conditionName: c.name,
+        slot: slotDesc.slot,
+        scheduledForLabel: slotDesc.label,
+        now: new Date(),
+      });
+      cRep.activeAlerts.slice(0, 2).forEach((al) => crossAlerts.push({ ...al, conditionId: c.id, conditionIcon: c.icon, conditionName: c.name }));
+    });
+
+    const genStr = new Date(activeReport.generatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
     return `
+      ${renderConditionSwitcher(data)}
+
       <section class="hero-card">
         <div class="row-between" style="align-items:flex-start">
           <div>
-            <div class="hero-slot">${activeReport?.slot === 'evening' ? '🌙' : '☀️'} ${esc(activeReport?.scheduledForLabel || 'Twice-Daily Schedule')}</div>
-            <h2 class="hero-headline">${esc(activeReport?.headline || 'Daily Eczema Insights')}</h2>
+            <div class="hero-slot">${activeReport.slot === 'evening' ? '🌙' : '☀️'} ${esc(activeReport.scheduledForLabel)} · ${cond.icon} ${esc(cond.name)}</div>
+            <h2 class="hero-headline">${esc(activeReport.headline)}</h2>
           </div>
           <button class="btn btn-secondary btn-sm" id="refresh-insights-btn">↻ Refresh</button>
         </div>
-        <p class="hero-body">${esc(activeReport?.narrativeSummary || '')}</p>
+        <p class="hero-body">${esc(activeReport.narrativeSummary)}</p>
         <div class="hero-meta">
           <span>Ready: ${genStr}</span>
           <span>Next auto-run: ${E.formatTime12h(nextRun.timeStr)} (${nextRun.countdown})</span>
         </div>
       </section>
 
-      ${activeReport && activeReport.activeAlerts.length ? `
+      ${crossAlerts.length ? `
         <section class="card">
           <div class="card-header">
-            <div><h2 class="card-title">Active Reaction Watchlist</h2><p class="card-sub">Exposures in the last 72h approaching their typical peak flare window.</p></div>
-            <span class="badge badge-warning">${activeReport.activeAlerts.length} Active</span>
+            <div><h2 class="card-title">Cross-Condition Reaction Watchlist</h2><p class="card-sub">Exposures in the last 72h approaching peak flare windows across all tracked issues.</p></div>
+            <span class="badge badge-warning">${crossAlerts.length} Active</span>
           </div>
-          ${activeReport.activeAlerts.map((a) => `
-            <div class="divider-row" data-pick-ivar="${esc(a.variableId)}" style="cursor:pointer">
+          ${crossAlerts.map((a) => `
+            <div class="divider-row" data-pick-cond-ivar="${esc(a.conditionId)}|${esc(a.variableId)}" style="cursor:pointer">
               <div class="row-between">
-                <b style="font-size:13.5px">${esc(a.variableName)}</b>
+                <b style="font-size:13.5px">${a.conditionIcon} ${esc(a.conditionName)} ← ${esc(a.variableName)}</b>
                 <span class="badge ${a.riskLevel === 'high' ? 'badge-trigger' : 'badge-warning'}">${esc(a.expectedPeakWindowLabel)}</span>
               </div>
               <p class="card-sub" style="margin-top:4px">${esc(a.reason)}</p>
@@ -771,8 +880,8 @@
         <section class="card">
           <div class="card-header">
             <div>
-              <h2 class="card-title">Exposure Time vs. Eczema Flare-Up</h2>
-              <p class="card-sub">Visualize exposure timestamps and exact reaction lag until flare-up.</p>
+              <h2 class="card-title">Exposure Time vs. ${esc(cond.name)} Flare-Up</h2>
+              <p class="card-sub">Visualize exposure timestamps and exact reaction lag until ${esc(cond.name.toLowerCase())} flares.</p>
             </div>
             <button class="btn btn-secondary btn-sm" data-open-var="${esc(activeVar.variableId)}">Full Stats</button>
           </div>
@@ -831,7 +940,18 @@
   function renderSettings() {
     const s = state.settings;
     const proxyUrl = A.getProxyUrl();
+    const condNames = (state.userConditions || []).filter((c) => c.isActive !== false).map((c) => `${c.icon} ${c.name}`).join(', ');
     return `
+      <section class="card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">Tracked Health Conditions</h2>
+            <p class="card-sub">Active: ${esc(condNames || 'None')}. Add stomach pain, acne, migraines, or any custom issue.</p>
+          </div>
+        </div>
+        <button class="btn btn-primary" id="open-manage-conds-btn">+ Manage / Add Health Conditions</button>
+      </section>
+
       <section class="card">
         <div class="card-header">
           <div>
@@ -934,6 +1054,235 @@
     document.getElementById('modal-backdrop').classList.add('hidden');
   }
 
+  function openManageConditionsModal() {
+    const activeIds = new Set((state.userConditions || []).filter((c) => c.isActive !== false).map((c) => c.id));
+    const customList = (state.userConditions || []).filter((c) => c.isCustom);
+    const emojiOptions = ['🩹', '🤢', '✨', '🧠', '🤧', '🦴', '⚡', '🔥', '💤', '❤️‍🩹', '🫁', '🌡️'];
+    const colorOptions = ['#D1493E', '#C97B1A', '#7A52B3', '#3B78B8', '#248A67', '#1B6B63'];
+
+    openModal(
+      'Track Health Conditions',
+      `<div style="font-size:12.5px;color:var(--text-sec);margin-bottom:10px">
+        Enable any starter conditions below or add your own custom symptoms to track &amp; correlate simultaneously.
+      </div>
+      <div class="card" style="padding:12px">
+        <div style="font-size:13px;font-weight:800;margin-bottom:6px">Starter Conditions</div>
+        ${E.STARTER_CONDITIONS.map((c) => {
+          const checked = activeIds.has(c.id);
+          return `<div class="switch-row">
+            <div>
+              <div style="font-size:14px;font-weight:700">${c.icon} ${esc(c.name)} <span class="badge badge-neutral" style="font-size:10px">${esc(c.category)}</span></div>
+              <div style="font-size:11px;color:var(--text-muted)">${esc((c.subMetrics || []).join(' · '))}</div>
+            </div>
+            <input type="checkbox" data-toggle-starter-cond="${esc(c.id)}" ${checked ? 'checked' : ''} />
+          </div>`;
+        }).join('')}
+      </div>
+
+      ${customList.length ? `<div class="card" style="padding:12px">
+        <div style="font-size:13px;font-weight:800;margin-bottom:6px">Your Custom Conditions (${customList.length})</div>
+        ${customList.map((c) => `<div class="row-between divider-row">
+          <div>
+            <div style="font-size:14px;font-weight:700">${c.icon || '🩺'} ${esc(c.name)}</div>
+            <div style="font-size:11px;color:var(--text-muted)">${esc(c.category || 'Custom')}${c.subMetrics && c.subMetrics.length ? ' · ' + esc(c.subMetrics.join(', ')) : ''}</div>
+          </div>
+          <button class="btn btn-danger btn-sm" data-del-cond="${esc(c.id)}">Remove</button>
+        </div>`).join('')}
+      </div>` : ''}
+
+      <div class="card" style="padding:13px">
+        <div style="font-size:13.5px;font-weight:800;margin-bottom:4px">+ Add Custom Health Issue</div>
+        <label class="field-label">Condition / Symptom Name</label>
+        <input class="input" id="new-cond-name" placeholder="e.g., Bloating, Fatigue, Hives, Anxiety, Reflux" />
+        <label class="field-label">Category</label>
+        <select class="input" id="new-cond-cat">
+          <option value="General">General</option>
+          <option value="Digestive">Digestive</option>
+          <option value="Skin">Skin</option>
+          <option value="Neurological">Neurological</option>
+          <option value="Respiratory">Respiratory</option>
+          <option value="Mood / Energy">Mood / Energy</option>
+          <option value="Musculoskeletal">Musculoskeletal</option>
+        </select>
+        <label class="field-label">Icon</label>
+        <div class="wrap" style="margin-bottom:6px">
+          ${emojiOptions.map((em, idx) => `<button type="button" class="chip ${idx === 0 ? 'active' : ''}" data-pick-emoji="${em}">${em}</button>`).join('')}
+        </div>
+        <label class="field-label">Optional Sub-Symptoms (comma-separated)</label>
+        <input class="input" id="new-cond-subs" placeholder="e.g., Pain, Intensity, Duration" />
+        <button class="btn btn-primary" id="create-cond-btn" style="margin-top:12px">+ Add Condition</button>
+      </div>`
+    );
+
+    let chosenEmoji = emojiOptions[0];
+    document.querySelectorAll('[data-pick-emoji]').forEach((b) => {
+      b.addEventListener('click', () => {
+        chosenEmoji = b.dataset.pickEmoji;
+        document.querySelectorAll('[data-pick-emoji]').forEach((x) => x.classList.toggle('active', x === b));
+      });
+    });
+
+    document.querySelectorAll('[data-toggle-starter-cond]').forEach((chk) => {
+      chk.addEventListener('change', () => {
+        const id = chk.dataset.toggleStarterCond;
+        const tpl = E.STARTER_CONDITIONS.find((c) => c.id === id);
+        if (!tpl) return;
+        const existingIdx = state.userConditions.findIndex((c) => c.id === id);
+        if (chk.checked) {
+          if (existingIdx >= 0) state.userConditions[existingIdx].isActive = true;
+          else state.userConditions.push({ ...tpl, isActive: true });
+          if (state.form.conditionSeverities[id] === undefined) state.form.conditionSeverities[id] = 2;
+        } else {
+          const activeNow = state.userConditions.filter((c) => c.isActive !== false);
+          if (activeNow.length <= 1) {
+            chk.checked = true;
+            return showToast('Keep at least 1 active condition');
+          }
+          if (existingIdx >= 0) state.userConditions[existingIdx].isActive = false;
+        }
+        persist();
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-del-cond]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.dataset.delCond;
+        state.userConditions = state.userConditions.filter((c) => c.id !== id);
+        persist();
+        openManageConditionsModal();
+        render();
+        showToast('Removed custom condition');
+      });
+    });
+
+    document.getElementById('create-cond-btn').addEventListener('click', () => {
+      const name = (document.getElementById('new-cond-name').value || '').trim();
+      if (!name) return showToast('Enter a condition or symptom name');
+      const category = document.getElementById('new-cond-cat').value;
+      const subsRaw = (document.getElementById('new-cond-subs').value || '').trim();
+      const subMetrics = subsRaw
+        ? subsRaw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 3)
+        : ['Intensity', 'Discomfort'];
+      const id = `cond_${E.normalizeIngredientKey(name)}_${Date.now().toString(36)}`;
+      const color = colorOptions[state.userConditions.length % colorOptions.length];
+      state.userConditions.push({
+        id,
+        name,
+        icon: chosenEmoji,
+        color,
+        category,
+        subMetrics,
+        areas: [],
+        isActive: true,
+        isCustom: true,
+      });
+      state.form.conditionSeverities[id] = 2;
+      state.activeConditionId = id;
+      persist();
+      closeModal();
+      showToast(`Added "${name}" to your tracked conditions`);
+      render();
+    });
+  }
+
+  function openDetailedConditionModal(condId) {
+    const data = getActiveData();
+    const cond = data.conditions.find((c) => c.id === condId);
+    if (!cond) return;
+    let sev = state.form.conditionSeverities[cond.id] !== undefined ? state.form.conditionSeverities[cond.id] : 3;
+    const subs = cond.subMetrics && cond.subMetrics.length ? cond.subMetrics : ['Intensity', 'Discomfort'];
+    const subVals = {};
+    subs.forEach((s) => { subVals[s] = sev; });
+    let selAreas = [];
+
+    const draw = () => {
+      const mkScale = (key, lbl, val) => {
+        let pills = '';
+        for (let i = 0; i <= 10; i++) {
+          const sel = i === val;
+          pills += `<button type="button" class="step-pill ${sel ? 'selected' : ''}" data-dscale="${esc(key)}" data-dval="${i}" style="${sel ? `background:${severityColor(i)}` : ''}">${i}</button>`;
+        }
+        return `<div class="scale-block">
+          <div class="scale-top"><span>${esc(lbl)}</span><span style="color:${severityColor(val)};font-weight:800">${val}/10</span></div>
+          <div class="pill-row">${pills}</div>
+        </div>`;
+      };
+
+      openModal(
+        `${cond.icon || '🩺'} Detailed ${cond.name} Check-In`,
+        `${mkScale('overall', `Overall ${cond.name} Severity`, sev)}
+        ${subs.map((s) => mkScale(`sub:${s}`, s, subVals[s])).join('')}
+        ${cond.areas && cond.areas.length ? `
+          <label class="field-label">Affected Areas</label>
+          <div class="wrap" style="margin-bottom:10px">
+            ${cond.areas.map((a) => `<button type="button" class="chip ${selAreas.includes(a) ? 'active' : ''}" data-darea="${esc(a)}">${esc(a)}</button>`).join('')}
+          </div>` : ''}
+        <label class="field-label">Notes</label>
+        <textarea class="input" id="detail-cond-notes" rows="2" placeholder="Optional context (e.g., started 2h after lunch)..."></textarea>
+        <button class="btn btn-primary" id="save-detail-cond-btn" style="margin-top:12px">✓ Save ${esc(cond.name)} Check-In</button>`
+      );
+
+      document.querySelectorAll('[data-dscale]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const k = b.dataset.dscale;
+          const v = Number(b.dataset.dval);
+          if (k === 'overall') sev = v;
+          else subVals[k.slice(4)] = v;
+          draw();
+        });
+      });
+      document.querySelectorAll('[data-darea]').forEach((b) => {
+        b.addEventListener('click', () => {
+          const a = b.dataset.darea;
+          selAreas = selAreas.includes(a) ? selAreas.filter((x) => x !== a) : [...selAreas, a];
+          draw();
+        });
+      });
+      document.getElementById('save-detail-cond-btn').addEventListener('click', async () => {
+        const now = new Date();
+        const noteText = (document.getElementById('detail-cond-notes').value || '').trim();
+        state.form.conditionSeverities[cond.id] = sev;
+        state.userEczemaLogs.unshift({
+          id: `log_${cond.id}_${Date.now()}`,
+          conditionId: cond.id,
+          timestamp: now.toISOString(),
+          dateKey: E.toDateKey(now),
+          severity: sev,
+          itchLevel: subVals[subs[0]] ?? sev,
+          rednessLevel: subVals[subs[1]] ?? sev,
+          drynessLevel: subVals[subs[2]] ?? sev,
+          affectedAreas: [...selAreas],
+          timeOfDay: E.getTimeOfDayBucket(now),
+          season: E.getSeasonForLocation(now, state.lastMetadata?.latitude),
+          notes: noteText || undefined,
+        });
+        persist();
+        closeModal();
+        showToast(`Saved ${cond.name} check-in (${sev}/10)`);
+        render();
+        // Auto-sync live weather/pollen if stale
+        if (!state.lastMetadata || Date.now() - new Date(state.lastMetadata.capturedAt).getTime() > 30 * 60 * 1000) {
+          try {
+            const snap = await E.fetchLiveWeatherAndPollen();
+            state.lastMetadata = snap;
+            const dk = E.toDateKey(new Date(snap.capturedAt));
+            const addM = [];
+            if (snap.humidityPct !== undefined) addM.push({ id: `w_h_${dk}`, variableId: 'var_humidity', variableName: 'Humidity', category: 'environment', timestamp: snap.capturedAt, dateKey: dk, numericValue: snap.humidityPct, unit: '%', source: 'auto_weather_api' });
+            if (snap.temperatureC !== undefined) addM.push({ id: `w_t_${dk}`, variableId: 'var_temperature', variableName: 'Temperature', category: 'environment', timestamp: snap.capturedAt, dateKey: dk, numericValue: snap.temperatureC, unit: '°C', source: 'auto_weather_api' });
+            if (snap.pollenIndex !== undefined) addM.push({ id: `w_p_${dk}`, variableId: 'var_local_allergens', variableName: 'Local Allergens (Pollen & AQI)', category: 'environment', timestamp: snap.capturedAt, dateKey: dk, numericValue: snap.pollenIndex, unit: 'idx', source: 'auto_pollen_api' });
+            const ids = new Set(addM.map((m) => m.id));
+            state.userMeasurements = [...addM, ...state.userMeasurements.filter((m) => !ids.has(m.id))];
+            persist();
+            render();
+          } catch (_) {}
+        }
+      });
+    };
+
+    draw();
+  }
+
   function openAddVariableModal() {
     const templates = [
       { name: 'New Laundry Detergent', type: 'boolean', unit: '', desc: 'Fragranced detergent exposure' },
@@ -1002,7 +1351,7 @@
     const item = data.correlations.find((r) => r.variableId === varId);
     if (!item) return;
     openModal(
-      item.variableName,
+      `${item.variableName} → ${data.activeCondition.name}`,
       `<div class="card">
         <div class="row-between">
           <div class="wrap" style="align-items:center">
@@ -1043,11 +1392,11 @@
     const data = getActiveData();
 
     const titles = {
-      today: ['FlareLens · Today', 'Daily check-in & auto-collected environment'],
-      food: ['Gemini Food Lens', 'Snap a meal photo to track ingredient triggers'],
-      metrics: ['Correlation Metrics', 'Immediate, delayed & multi-day build-up analysis'],
-      insights: ['Daily Insights', 'Scheduled 9:00 AM & 9:00 PM trigger reports'],
-      settings: ['Settings & Schedule', 'Gemini API, schedule & privacy controls'],
+      today: ['FlareLens · Home', 'Track multiple health issues & daily triggers'],
+      food: ['Gemini Food Lens', 'Snap a meal photo to correlate ingredients across all conditions'],
+      metrics: [`${data.activeCondition.icon} ${data.activeCondition.name} Metrics`, 'Immediate, delayed & multi-day build-up correlations'],
+      insights: [`${data.activeCondition.icon} ${data.activeCondition.name} Insights`, 'Scheduled 9:00 AM & 9:00 PM reports & flare graphs'],
+      settings: ['Settings & Schedule', 'Conditions, health apps, proxy & schedule controls'],
     };
     document.getElementById('header-title').textContent = titles[state.activeTab][0];
     document.getElementById('header-sub').textContent = titles[state.activeTab][1];
@@ -1206,36 +1555,84 @@
       syncBtn.addEventListener('click', () => syncLiveMetadata({ silent: false }));
     }
 
-    const saveEcz = document.getElementById('save-eczema-btn');
-    if (saveEcz) {
-      saveEcz.addEventListener('click', async () => {
+    // Multi-condition quick severity pills on Home landing page
+    document.querySelectorAll('[data-cond-sev]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.form.conditionSeverities[btn.dataset.condSev] = Number(btn.dataset.val);
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-detail-cond]').forEach((btn) => {
+      btn.addEventListener('click', () => openDetailedConditionModal(btn.dataset.detailCond));
+    });
+
+    document.querySelectorAll('[data-goto-metrics]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.activeConditionId = btn.dataset.gotoMetrics;
+        state.activeTab = 'metrics';
+        window.scrollTo(0, 0);
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-switch-cond]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        state.activeConditionId = btn.dataset.switchCond;
+        state.selectedInsightVarId = null;
+        render();
+      });
+    });
+
+    document.querySelectorAll('[data-pick-cond-ivar]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const [cid, vid] = el.dataset.pickCondIvar.split('|');
+        state.activeConditionId = cid;
+        state.selectedInsightVarId = vid;
+        render();
+      });
+    });
+
+    document.querySelectorAll('#open-manage-conds-btn').forEach((btn) => {
+      btn.addEventListener('click', openManageConditionsModal);
+    });
+
+    const saveAllBtn = document.getElementById('save-all-conds-btn');
+    if (saveAllBtn) {
+      saveAllBtn.addEventListener('click', async () => {
         const now = new Date();
-        state.userEczemaLogs.unshift({
-          id: `log_${Date.now()}`,
-          timestamp: now.toISOString(),
-          dateKey: E.toDateKey(now),
-          severity: state.form.severity,
-          itchLevel: state.form.itch,
-          rednessLevel: state.form.redness,
-          drynessLevel: state.form.dryness,
-          affectedAreas: [...state.form.areas],
-          timeOfDay: E.getTimeOfDayBucket(now),
-          season: E.getSeasonForLocation(now, state.lastMetadata?.latitude),
-          notes: state.form.notes.trim() || undefined,
+        const data = getActiveData();
+        const noteText = state.form.notes.trim() || undefined;
+        data.conditions.forEach((cond, idx) => {
+          const sev = state.form.conditionSeverities[cond.id] !== undefined ? state.form.conditionSeverities[cond.id] : 2;
+          state.userEczemaLogs.unshift({
+            id: `log_${cond.id}_${Date.now()}_${idx}`,
+            conditionId: cond.id,
+            timestamp: now.toISOString(),
+            dateKey: E.toDateKey(now),
+            severity: sev,
+            itchLevel: sev,
+            rednessLevel: sev,
+            drynessLevel: sev,
+            affectedAreas: [],
+            timeOfDay: E.getTimeOfDayBucket(now),
+            season: E.getSeasonForLocation(now, state.lastMetadata?.latitude),
+            notes: noteText,
+          });
         });
         state.form.notes = '';
         persist();
         const needsSync = shouldAutoSyncLive();
         showToast(
           needsSync
-            ? `Saved severity ${state.form.severity}/10 · auto-syncing live weather & pollen…`
-            : `Saved severity ${state.form.severity}/10`
+            ? `Saved ${data.conditions.length} conditions · auto-syncing live weather & pollen…`
+            : `Saved check-in for ${data.conditions.length} conditions`
         );
         render();
         if (needsSync) {
           const snap = await syncLiveMetadata({ silent: true });
           if (snap) {
-            showToast(`Check-in saved + synced ${snap.locationName} (${snap.humidityPct ?? '—'}% hum)`);
+            showToast(`Saved ${data.conditions.length} conditions + synced ${snap.locationName}`);
           }
         }
       });
