@@ -102,15 +102,69 @@
       errorMessage: '',
       errorRetriable: false,
     },
-    // Metrics filters
+    // Metrics filters & simplified view toggles
     metricsCategory: 'all',
     metricsDirection: 'all',
+    showTechnicalStats: false,
+    showMoreLifestyle: false,
+    showInsightLagChart: false,
     // Insights state
     selectedInsightVarId: null,
     selectedReportId: null,
     showCumulative: false,
     syncingSensors: false,
   };
+
+  // --- Plain-English Simplification Helpers (fewer raw numbers, clearer takeaways) ---
+  function humanStrength(item) {
+    const abs = Math.abs(item.bestLag.score);
+    const pct = Math.min(100, Math.max(12, Math.round(abs * 100)));
+    if (item.direction === 'trigger') {
+      if (abs >= 0.6) return { label: 'Strong Trigger', pct, color: '#D1493E', badge: 'badge-trigger' };
+      if (abs >= 0.4) return { label: 'Likely Trigger', pct, color: '#D95D39', badge: 'badge-trigger' };
+      if (abs >= 0.25) return { label: 'Possible Trigger', pct, color: '#C97B1A', badge: 'badge-warning' };
+    } else if (item.direction === 'protective') {
+      if (abs >= 0.55) return { label: 'Strong Protector', pct, color: '#248A67', badge: 'badge-protective' };
+      if (abs >= 0.35) return { label: 'Helps Calm', pct, color: '#2A9D6F', badge: 'badge-protective' };
+      return { label: 'Mildly Helpful', pct, color: '#4C8F87', badge: 'badge-protective' };
+    }
+    return { label: 'No Clear Link', pct: Math.min(30, pct), color: '#7C8E8A', badge: 'badge-neutral' };
+  }
+
+  function humanTiming(item) {
+    switch (item.bestLag.lagKey) {
+      case 'immediate_0d': return 'Same day';
+      case 'delayed_1d': return 'Next day';
+      case 'delayed_2d': return '2 days later';
+      case 'delayed_3d': return '3 days later';
+      case 'cumulative_3d': return 'Builds up (3 days)';
+      case 'cumulative_5d': return 'Builds up (5 days)';
+      default: return item.bestLag.label;
+    }
+  }
+
+  function humanTakeaway(item, condName) {
+    const cond = (condName || 'symptoms').toLowerCase();
+    const timing = humanTiming(item).toLowerCase();
+    if (item.direction === 'trigger') {
+      if (item.pattern === 'cumulative_buildup') {
+        return `Repeated ${item.variableName.toLowerCase()} over several days tends to flare your ${cond}.`;
+      }
+      const worseWord = item.avgSeverityWhenHigh >= 6 ? 'noticeably worse' : 'higher';
+      return `${item.variableName} is linked to ${worseWord} ${cond} (${timing}).`;
+    }
+    if (item.direction === 'protective') {
+      return `Higher ${item.variableName.toLowerCase()} tends to mean calmer ${cond}; drops often precede flares.`;
+    }
+    return `Not enough evidence of a link to ${cond} yet.`;
+  }
+
+  function severityTierLabel(v) {
+    if (v <= 1) return 'Clear';
+    if (v <= 4) return 'Mild';
+    if (v <= 7) return 'Moderate';
+    return 'Severe';
+  }
 
   function persist() {
     try {
@@ -464,37 +518,41 @@
     const condMap = new Map(data.conditions.map((c) => [c.id, c]));
 
     const conditionCardsHtml = data.conditions.map((cond) => {
-      const val = state.form.conditionSeverities[cond.id] !== undefined ? state.form.conditionSeverities[cond.id] : 2;
+      const val = state.form.conditionSeverities[cond.id] !== undefined ? state.form.conditionSeverities[cond.id] : 0;
       const condCorrs = data.correlationsByCondition[cond.id] || [];
-      const topTrig = condCorrs.find((r) => r.direction === 'trigger' && Math.abs(r.bestLag.score) >= 0.25);
+      const topTrig = condCorrs.find((r) => r.direction === 'trigger' && Math.abs(r.bestLag.score) >= 0.3);
       const latestLog = data.allSymptomLogs.find((l) => l.conditionId === cond.id);
       const signalText = topTrig
-        ? `Top signal: ${topTrig.variableName} (+${topTrig.bestLag.score.toFixed(2)} · ${topTrig.bestLag.shortLabel})`
+        ? `Top suspect: ${topTrig.variableName} (${humanTiming(topTrig).toLowerCase()})`
         : latestLog
-        ? `Last logged: ${latestLog.severity}/10 (${severityLabel(latestLog.severity)})`
-        : 'Ready to track — log daily to detect triggers';
+        ? `Last logged: ${severityTierLabel(latestLog.severity)}`
+        : 'Tap how you feel today to start tracking';
 
-      let pills = '';
-      for (let i = 0; i <= 10; i++) {
-        const sel = i === val;
-        pills += `<button class="step-pill ${sel ? 'selected' : ''}" data-cond-sev="${esc(cond.id)}" data-val="${i}" style="${sel ? `background:${severityColor(i)}` : ''}">${i}</button>`;
-      }
+      const levels = [
+        { label: 'Clear', val: 0, color: '#2A9D6F' },
+        { label: 'Mild', val: 3, color: '#7BB661' },
+        { label: 'Moderate', val: 6, color: '#E09F3E' },
+        { label: 'Severe', val: 9, color: '#D1493E' },
+      ];
+      const activeTier = severityTierLabel(val);
 
       return `<div class="cond-card" style="border-left-color:${cond.color || '#1B6B63'}">
         <div class="cond-card-top">
           <div style="flex:1">
-            <div class="cond-name">${cond.icon || '🩺'} ${esc(cond.name)} <span class="badge badge-neutral" style="margin-left:4px">${esc(cond.category || 'Symptom')}</span></div>
+            <div class="cond-name">${cond.icon || '🩺'} ${esc(cond.name)}</div>
             <div class="cond-signal">${esc(signalText)}</div>
           </div>
-          <div style="text-align:right">
-            <span style="font-size:15px;font-weight:800;color:${severityColor(val)}">${val}/10</span>
-            <div style="font-size:10.5px;color:var(--text-muted)">${severityLabel(val)}</div>
-          </div>
+          <span class="badge" style="background:${severityColor(val)}20;color:${severityColor(val)}">${activeTier}</span>
         </div>
-        <div class="pill-row">${pills}</div>
+        <div class="level-grid">
+          ${levels.map((lv) => {
+            const sel = activeTier === lv.label;
+            return `<button class="level-btn ${sel ? 'selected' : ''}" data-cond-sev="${esc(cond.id)}" data-val="${lv.val}" style="${sel ? `background:${lv.color}` : ''}">${lv.label}</button>`;
+          }).join('')}
+        </div>
         <div class="cond-actions">
           <button class="link-btn" data-detail-cond="${esc(cond.id)}">✎ Detailed Log</button>
-          <button class="link-btn" data-goto-metrics="${esc(cond.id)}">Correlations →</button>
+          <button class="link-btn" data-goto-metrics="${esc(cond.id)}">View Triggers →</button>
         </div>
       </div>`;
     }).join('');
@@ -542,40 +600,32 @@
         <button class="btn btn-primary" id="save-all-conds-btn" style="margin-top:10px">✓ Save Check-In for All ${data.conditions.length} Conditions</button>
       </section>
 
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Auto-Collected Metadata</h2>
-            <p class="card-sub">${esc(lm.locationName || 'GPS/IP Weather, Humidity & Local Allergens')}</p>
-          </div>
-          <button class="btn btn-secondary btn-sm" id="sync-env-btn">${state.syncingSensors ? 'Syncing…' : '↻ Sync Live'}</button>
-        </div>
-        <div class="meta-grid">
-          <div class="meta-tile"><div class="meta-label">Humidity</div><div class="meta-val">${hum !== undefined ? hum + '%' : '—'}</div><div class="meta-src">Open-Meteo</div></div>
-          <div class="meta-tile"><div class="meta-label">Temperature</div><div class="meta-val">${formatTemp(tmp)}</div><div class="meta-src">Auto Weather</div></div>
-          <div class="meta-tile"><div class="meta-label">Local Allergens</div><div class="meta-val">${pol !== undefined ? pol + '/100' : '—'}</div><div class="meta-src">Pollen + AQI</div></div>
-          <div class="meta-tile"><div class="meta-label">Exercise</div><div class="meta-val">${exe !== undefined ? exe + 'm' : '—'}</div><div class="meta-src">Daily Activity</div></div>
-        </div>
-      </section>
-
       ${(() => {
         const conns = H.loadConnections();
         const connectedCount = Object.values(conns).filter((c) => c && c.connected).length;
         const slq = findVal('var_sleep_quality');
         const hrv = findVal('var_hrv');
-        const rhr = findVal('var_resting_hr');
+        const humText = hum === undefined ? 'Humidity —' : hum < 38 ? `Dry air (${hum}%)` : hum > 60 ? `Humid (${hum}%)` : `Comfortable air (${hum}%)`;
+        const polText = pol === undefined ? 'Pollen —' : pol >= 60 ? 'High pollen' : pol >= 35 ? 'Moderate pollen' : 'Low pollen';
+        const slpText = slq === undefined ? 'Sleep —' : slq >= 7 ? 'Good sleep' : slq >= 5 ? 'Fair sleep' : 'Poor sleep';
+        const hrvText = hrv === undefined ? '' : hrv >= 55 ? 'Good recovery' : 'Low recovery';
         return `<section class="card">
-          <div class="card-header">
+          <div class="card-header" style="margin-bottom:8px">
             <div>
-              <h2 class="card-title">Health Apps &amp; Wearables ${G.renderInfoBtn('hrv_rhr')}</h2>
-              <p class="card-sub">Apple Health, WHOOP, Garmin &amp; Strava · ${connectedCount > 0 ? `${connectedCount} connected` : 'Connect to sync sleep quality, HRV & workouts'}</p>
+              <h2 class="card-title">Today's Environment &amp; Wearables</h2>
+              <p class="card-sub">${esc(lm.locationName || 'Auto-synced when you save a check-in')}${connectedCount > 0 ? ` · ${connectedCount} health app linked` : ''}</p>
             </div>
-            <button class="btn btn-primary btn-sm" id="open-health-apps-btn">⌚ Connect</button>
+            <div class="row" style="gap:5px">
+              <button class="btn btn-secondary btn-sm" id="sync-env-btn">${state.syncingSensors ? '…' : '↻ Sync'}</button>
+              <button class="btn btn-primary btn-sm" id="open-health-apps-btn">⌚ Apps</button>
+            </div>
           </div>
-          <div class="grid-3">
-            <div class="meta-tile"><div class="meta-label">Sleep Quality</div><div class="meta-val" style="font-size:17px">${slq !== undefined ? slq + '/10' : '—'}</div><div class="meta-src">Wearable</div></div>
-            <div class="meta-tile"><div class="meta-label">HRV</div><div class="meta-val" style="font-size:17px">${hrv !== undefined ? Math.round(hrv) + 'ms' : '—'}</div><div class="meta-src">Recovery</div></div>
-            <div class="meta-tile"><div class="meta-label">Resting HR</div><div class="meta-val" style="font-size:17px">${rhr !== undefined ? Math.round(rhr) + 'bpm' : '—'}</div><div class="meta-src">Cardio</div></div>
+          <div class="env-strip">
+            <span class="env-pill">💧 ${humText}</span>
+            <span class="env-pill">🌡️ ${formatTemp(tmp)}</span>
+            <span class="env-pill">🌿 ${polText}</span>
+            <span class="env-pill">😴 ${slpText}</span>
+            ${hrvText ? `<span class="env-pill">❤️ ${hrvText}</span>` : ''}
           </div>
         </section>`;
       })()}
@@ -583,33 +633,53 @@
       <section class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">Daily Lifestyle &amp; Custom Triggers</h2>
-            <p class="card-sub">Stress, sleep, screen time, exercise &amp; your custom variables.</p>
+            <h2 class="card-title">Daily Habits &amp; Custom Triggers</h2>
+            <p class="card-sub">Quick check-in on stress, sleep &amp; your personal triggers.</p>
           </div>
           <button class="btn btn-secondary btn-sm" id="open-add-var-btn">+ Add Trigger</button>
         </div>
-        ${renderScalePills('stress', 'Stress Level', state.form.stress, 1, 10, false)}
-        ${renderScalePills('sleepQuality', 'Sleep Quality', state.form.sleepQuality, 1, 10, false)}
-        <div class="grid-3">
-          <div><label class="field-label">Sleep (hrs)</label><input class="input" id="inp-sleep" type="number" step="0.5" value="${esc(state.form.sleepHours)}" /></div>
-          <div><label class="field-label">Screen (hrs)</label><input class="input" id="inp-screen" type="number" step="0.5" value="${esc(state.form.screenTime)}" /></div>
-          <div><label class="field-label">Exercise (min)</label><input class="input" id="inp-exercise" type="number" value="${esc(state.form.exercise)}" /></div>
+        <div class="scale-block">
+          <div class="scale-top"><span>Stress Today</span><span style="color:var(--primary);font-weight:800">${state.form.stress <= 3 ? 'Low' : state.form.stress <= 6 ? 'Moderate' : state.form.stress <= 8 ? 'High' : 'Very High'}</span></div>
+          <div class="level-grid">
+            ${[['Low', 2, '#2A9D6F'], ['Moderate', 5, '#E09F3E'], ['High', 7, '#D95D39'], ['Very High', 9, '#B22234']].map(([lbl, v, col]) => {
+              const sel = (lbl === 'Low' && state.form.stress <= 3) || (lbl === 'Moderate' && state.form.stress >= 4 && state.form.stress <= 6) || (lbl === 'High' && state.form.stress >= 7 && state.form.stress <= 8) || (lbl === 'Very High' && state.form.stress >= 9);
+              return `<button class="level-btn ${sel ? 'selected' : ''}" data-scale-key="stress" data-scale-val="${v}" style="${sel ? `background:${col}` : ''}">${lbl}</button>`;
+            }).join('')}
+          </div>
         </div>
+        <div class="scale-block">
+          <div class="scale-top"><span>Last Night's Sleep</span><span style="color:var(--primary);font-weight:800">${state.form.sleepQuality <= 3 ? 'Poor' : state.form.sleepQuality <= 6 ? 'Fair' : state.form.sleepQuality <= 8 ? 'Good' : 'Great'}</span></div>
+          <div class="level-grid">
+            ${[['Poor', 3, '#D1493E'], ['Fair', 5, '#E09F3E'], ['Good', 7, '#7BB661'], ['Great', 9, '#2A9D6F']].map(([lbl, v, col]) => {
+              const sel = (lbl === 'Poor' && state.form.sleepQuality <= 3) || (lbl === 'Fair' && state.form.sleepQuality >= 4 && state.form.sleepQuality <= 6) || (lbl === 'Good' && state.form.sleepQuality >= 7 && state.form.sleepQuality <= 8) || (lbl === 'Great' && state.form.sleepQuality >= 9);
+              return `<button class="level-btn ${sel ? 'selected' : ''}" data-scale-key="sleepQuality" data-scale-val="${v}" style="${sel ? `background:${col}` : ''}">${lbl}</button>`;
+            }).join('')}
+          </div>
+        </div>
+        <button type="button" class="details-toggle" id="toggle-more-lifestyle">
+          <span>More Details (Sleep hrs, Screen time, Exercise)</span>
+          <span>${state.showMoreLifestyle ? '▴' : '▾'}</span>
+        </button>
+        ${state.showMoreLifestyle ? `
+          <div class="grid-3" style="margin-top:8px">
+            <div><label class="field-label">Sleep (hrs)</label><input class="input" id="inp-sleep" type="number" step="0.5" value="${esc(state.form.sleepHours)}" /></div>
+            <div><label class="field-label">Screen (hrs)</label><input class="input" id="inp-screen" type="number" step="0.5" value="${esc(state.form.screenTime)}" /></div>
+            <div><label class="field-label">Exercise (min)</label><input class="input" id="inp-exercise" type="number" value="${esc(state.form.exercise)}" /></div>
+          </div>` : ''}
         ${customHtml}
-        <button class="btn btn-secondary" id="save-vars-btn" style="margin-top:12px">Save Daily Variables</button>
+        <button class="btn btn-secondary" id="save-vars-btn" style="margin-top:12px">Save Daily Habits</button>
       </section>
 
       <section class="card">
-        <div class="card-header"><div><h2 class="card-title">Today's Check-Ins (${todaysLogs.length})</h2></div></div>
-        ${todaysLogs.length === 0 ? '<p class="card-sub">No check-ins logged today yet.</p>' : todaysLogs.slice(0, 12).map((l) => {
+        <div class="card-header"><div><h2 class="card-title">Today's Log (${todaysLogs.length})</h2></div></div>
+        ${todaysLogs.length === 0 ? '<p class="card-sub">No check-ins logged today yet.</p>' : todaysLogs.slice(0, 8).map((l) => {
           const c = condMap.get(l.conditionId) || { icon: '🩺', name: 'Symptom' };
-          return `<div class="row divider-row">
-            <div class="sev-circle" style="background:${severityColor(l.severity)}">${l.severity}</div>
-            <div style="flex:1">
-              <div style="font-size:13.5px;font-weight:700">${c.icon} ${esc(c.name)} · ${severityLabel(l.severity)} · ${new Date(l.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</div>
-              ${l.affectedAreas && l.affectedAreas.length ? `<div style="font-size:12px;color:var(--text-sec)">${l.affectedAreas.map((a) => String(a).replace(/_/g, ' ')).join(', ')}</div>` : ''}
-              ${l.notes ? `<div style="font-size:11.5px;color:var(--text-muted);font-style:italic">${esc(l.notes)}</div>` : ''}
+          return `<div class="row-between divider-row">
+            <div>
+              <div style="font-size:13.5px;font-weight:700">${c.icon} ${esc(c.name)}</div>
+              <div style="font-size:11.5px;color:var(--text-muted)">${new Date(l.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}${l.notes ? ' · ' + esc(l.notes) : ''}</div>
             </div>
+            <span class="badge" style="background:${severityColor(l.severity)}20;color:${severityColor(l.severity)}">${severityTierLabel(l.severity)}</span>
           </div>`;
         }).join('')}
       </section>`;
@@ -741,71 +811,72 @@
     return `
       ${renderConditionSwitcher(data)}
 
-      <div class="grid-4">
-        <div class="stat-box"><div class="stat-val">${res.length}</div><div class="stat-lbl">Variables</div></div>
-        <div class="stat-box"><div class="stat-val" style="color:var(--trigger)">${triggers}</div><div class="stat-lbl">Triggers (+)</div></div>
-        <div class="stat-box"><div class="stat-val" style="color:var(--protective)">${protective}</div><div class="stat-lbl">Protective (-)</div></div>
-        <div class="stat-box"><div class="stat-val" style="color:var(--cumulative)">${delayed}</div><div class="stat-lbl">Delayed / Build-Up</div></div>
+      <div class="row-between" style="margin-bottom:10px">
+        <button class="btn btn-secondary btn-sm" id="open-add-var-btn">+ Add Custom Trigger</button>
+        <button class="chip ${state.showTechnicalStats ? 'active' : ''}" id="toggle-tech-stats-btn">${state.showTechnicalStats ? '✓ Technical Stats On' : 'Show Technical Stats (r, p)'}</button>
       </div>
-
-      <button class="btn btn-secondary" id="open-add-var-btn" style="margin-bottom:12px">+ Add Custom Trigger Variable</button>
 
       <div class="scroll-x">
         ${catTabs.map(([id, lbl]) => `<button class="chip chip-solid ${state.metricsCategory === id ? 'active' : ''}" data-mcat="${id}">${lbl}</button>`).join('')}
       </div>
 
       <div class="row" style="margin-bottom:10px">
-        ${[['all', 'All'], ['trigger', 'Triggers (+)'], ['protective', 'Protective (-)']].map(([id, lbl]) =>
+        ${[['all', 'All'], ['trigger', 'Suspected Triggers'], ['protective', 'What Helps']].map(([id, lbl]) =>
           `<button class="chip chip-solid ${state.metricsDirection === id ? 'active' : ''}" data-mdir="${id}" style="flex:1;text-align:center">${lbl}</button>`
         ).join('')}
       </div>
 
-      <div class="card" style="padding:11px 13px;background:var(--surface-elev)">
-        <div style="font-size:11.5px;font-weight:700;color:var(--text-sec);margin-bottom:6px">Tap any stat term to learn how it works:</div>
-        <div class="wrap">
-          ${G.renderInfoBtn('r_value', 'r value')}
-          ${G.renderInfoBtn('lag_window', 'Reaction Lag')}
-          ${G.renderInfoBtn('cumulative_buildup', '3d / 5d Build-Up')}
-          ${G.renderInfoBtn('p_value', 'p-value')}
-          ${G.renderInfoBtn('confidence', 'Confidence')}
-        </div>
-      </div>
+      ${state.showTechnicalStats ? `
+        <div class="card" style="padding:11px 13px;background:var(--surface-elev)">
+          <div style="font-size:11.5px;font-weight:700;color:var(--text-sec);margin-bottom:6px">Tap any stat term to learn how it works:</div>
+          <div class="wrap">
+            ${G.renderInfoBtn('r_value', 'r value')}
+            ${G.renderInfoBtn('lag_window', 'Reaction Lag')}
+            ${G.renderInfoBtn('cumulative_buildup', '3d / 5d Build-Up')}
+            ${G.renderInfoBtn('p_value', 'p-value')}
+            ${G.renderInfoBtn('confidence', 'Confidence')}
+          </div>
+        </div>` : ''}
 
       ${filtered.map((item) => {
         const s = item.bestLag.score;
-        const col = item.direction === 'trigger' ? 'var(--trigger)' : item.direction === 'protective' ? 'var(--protective)' : 'var(--text-muted)';
-        const badgeCls = item.pattern === 'cumulative_buildup' ? 'badge-cumulative' : item.direction === 'trigger' ? 'badge-trigger' : item.direction === 'protective' ? 'badge-protective' : 'badge-neutral';
+        const hs = humanStrength(item);
+        const timing = humanTiming(item);
+        const takeaway = humanTakeaway(item, data.activeCondition.name);
         return `<section class="card" data-open-var="${esc(item.variableId)}" style="cursor:pointer">
           <div class="row-between" style="align-items:flex-start">
-            <div>
-              <div style="font-size:15px;font-weight:700">${esc(item.variableName)}</div>
-              <div class="wrap" style="margin-top:4px">
-                <span class="badge badge-neutral">${item.category.replace('_', ' ')}</span>
-                <span class="badge ${badgeCls}">${esc(item.bestLag.label)}</span>
+            <div style="flex:1">
+              <div style="font-size:15.5px;font-weight:800">${esc(item.variableName)}</div>
+              <div class="wrap" style="margin-top:5px">
+                <span class="badge ${hs.badge}">${hs.label}</span>
+                <span class="badge ${item.pattern === 'cumulative_buildup' ? 'badge-cumulative' : 'badge-neutral'}">⏱ ${esc(timing)}</span>
               </div>
             </div>
-            <div style="text-align:right">
-              <div style="font-size:16px;font-weight:800;color:${col}">r = ${s >= 0 ? '+' : ''}${s.toFixed(2)} ${G.renderInfoBtn('r_value')}</div>
-              <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">${item.confidence.replace('_', ' ')}</div>
-            </div>
+            ${state.showTechnicalStats ? `
+              <div style="text-align:right">
+                <div style="font-size:15px;font-weight:800;color:${hs.color}">r = ${s >= 0 ? '+' : ''}${s.toFixed(2)} ${G.renderInfoBtn('r_value')}</div>
+                <div style="font-size:10.5px;color:var(--text-muted);margin-top:2px">${item.confidence.replace('_', ' ')}</div>
+              </div>` : ''}
           </div>
-          <p class="card-sub" style="margin-top:8px">${esc(item.summary)}</p>
-          <div class="mini-lags">
-            ${item.allLags.map((l) => {
-              const best = l.lagKey === item.bestLag.lagKey;
-              const fc = l.score >= 0.18 ? '#D1493E' : l.score <= -0.18 ? '#248A67' : '#DCE4E0';
-              return `<div class="mini-lag-col">
-                <div class="mini-lag-track"><div class="mini-lag-fill" style="height:${Math.max(12, Math.round(Math.abs(l.score) * 100))}%;background:${fc};opacity:${best ? 1 : 0.42}"></div></div>
-                <div class="mini-lag-lbl ${best ? 'best' : ''}">${l.shortLabel}</div>
-              </div>`;
-            }).join('')}
-          </div>
+          <div class="impact-bar-track"><div class="impact-bar-fill" style="width:${hs.pct}%;background:${hs.color}"></div></div>
+          <p class="card-sub" style="margin-top:6px;color:var(--text);font-size:13px">${esc(takeaway)}</p>
+          ${state.showTechnicalStats ? `
+            <div class="mini-lags">
+              ${item.allLags.map((l) => {
+                const best = l.lagKey === item.bestLag.lagKey;
+                const fc = l.score >= 0.18 ? '#D1493E' : l.score <= -0.18 ? '#248A67' : '#DCE4E0';
+                return `<div class="mini-lag-col">
+                  <div class="mini-lag-track"><div class="mini-lag-fill" style="height:${Math.max(12, Math.round(Math.abs(l.score) * 100))}%;background:${fc};opacity:${best ? 1 : 0.42}"></div></div>
+                  <div class="mini-lag-lbl ${best ? 'best' : ''}">${l.shortLabel}</div>
+                </div>`;
+              }).join('')}
+            </div>` : ''}
           <div class="row-between divider-row" style="margin-top:8px;padding-bottom:0;font-size:11.5px;color:var(--text-muted)">
-            <span>${item.exposureCount} exposures · ${item.exposureFlarePairs.length} paired flares</span>
-            <span style="color:var(--primary);font-weight:700">Exposure graph →</span>
+            <span>${item.category.replace('_', ' ')}</span>
+            <span style="color:var(--primary);font-weight:700">See flare timeline →</span>
           </div>
         </section>`;
-      }).join('') || '<section class="card"><p class="card-sub">No matching variables yet.</p></section>'}`;
+      }).join('') || '<section class="card"><p class="card-sub">No matching triggers yet.</p></section>'}`;
   }
 
   function renderInsights(data) {
@@ -841,6 +912,14 @@
     });
 
     const genStr = new Date(activeReport.generatedAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+    const leadTrigger = activeReport.topTriggers[0];
+    const leadProt = activeReport.topProtective[0];
+    const simpleHeadline = leadTrigger
+      ? `${leadTrigger.variableName} is your top ${cond.name} trigger`
+      : `Keep logging ${cond.name} daily to uncover triggers`;
+    const simpleNarrative = leadTrigger
+      ? `${leadTrigger.variableName} tends to flare your ${cond.name.toLowerCase()} ${humanTiming(leadTrigger).toLowerCase()}.${leadProt ? ` Higher ${leadProt.variableName.toLowerCase()} appears to help keep symptoms calmer.` : ''}`
+      : `Once you log a few days of check-ins and meals, FlareLens will highlight what triggers your ${cond.name.toLowerCase()} and what helps.`;
 
     return `
       ${renderConditionSwitcher(data)}
@@ -849,21 +928,21 @@
         <div class="row-between" style="align-items:flex-start">
           <div>
             <div class="hero-slot">${activeReport.slot === 'evening' ? '🌙' : '☀️'} ${esc(activeReport.scheduledForLabel)} · ${cond.icon} ${esc(cond.name)}</div>
-            <h2 class="hero-headline">${esc(activeReport.headline)}</h2>
+            <h2 class="hero-headline">${esc(simpleHeadline)}</h2>
           </div>
           <button class="btn btn-secondary btn-sm" id="refresh-insights-btn">↻ Refresh</button>
         </div>
-        <p class="hero-body">${esc(activeReport.narrativeSummary)}</p>
+        <p class="hero-body">${esc(simpleNarrative)}</p>
         <div class="hero-meta">
-          <span>Ready: ${genStr}</span>
-          <span>Next auto-run: ${E.formatTime12h(nextRun.timeStr)} (${nextRun.countdown})</span>
+          <span>Updated: ${genStr}</span>
+          <span>Next report: ${E.formatTime12h(nextRun.timeStr)} (${nextRun.countdown})</span>
         </div>
       </section>
 
       ${crossAlerts.length ? `
         <section class="card">
           <div class="card-header">
-            <div><h2 class="card-title">Cross-Condition Reaction Watchlist</h2><p class="card-sub">Exposures in the last 72h approaching peak flare windows across all tracked issues.</p></div>
+            <div><h2 class="card-title">What to Watch Right Now</h2><p class="card-sub">Recent exposures that may trigger a flare soon.</p></div>
             <span class="badge badge-warning">${crossAlerts.length} Active</span>
           </div>
           ${crossAlerts.map((a) => `
@@ -872,7 +951,7 @@
                 <b style="font-size:13.5px">${a.conditionIcon} ${esc(a.conditionName)} ← ${esc(a.variableName)}</b>
                 <span class="badge ${a.riskLevel === 'high' ? 'badge-trigger' : 'badge-warning'}">${esc(a.expectedPeakWindowLabel)}</span>
               </div>
-              <p class="card-sub" style="margin-top:4px">${esc(a.reason)}</p>
+              <p class="card-sub" style="margin-top:4px">${esc(a.reason.replace(/\s*\(r\s*=[^)]+\)/g, ''))}</p>
             </div>`).join('')}
         </section>` : ''}
 
@@ -880,8 +959,8 @@
         <section class="card">
           <div class="card-header">
             <div>
-              <h2 class="card-title">Exposure Time vs. ${esc(cond.name)} Flare-Up</h2>
-              <p class="card-sub">Visualize exposure timestamps and exact reaction lag until ${esc(cond.name.toLowerCase())} flares.</p>
+              <h2 class="card-title">When ${esc(activeVar.variableName)} Triggers ${esc(cond.name)}</h2>
+              <p class="card-sub">Blue markers show exposure time; red peaks show flare-ups.</p>
             </div>
             <button class="btn btn-secondary btn-sm" data-open-var="${esc(activeVar.variableId)}">Full Stats</button>
           </div>
@@ -889,39 +968,46 @@
             ${list.map((v) => {
               const sel = v.variableId === activeVar.variableId;
               const bg = v.direction === 'trigger' ? '#D1493E' : '#248A67';
-              return `<button class="chip" data-pick-ivar="${esc(v.variableId)}" style="${sel ? `background:${bg};border-color:${bg};color:#fff` : ''}">${esc(v.variableName)} (${v.bestLag.score >= 0 ? '+' : ''}${v.bestLag.score.toFixed(2)})</button>`;
+              return `<button class="chip" data-pick-ivar="${esc(v.variableId)}" style="${sel ? `background:${bg};border-color:${bg};color:#fff` : ''}">${esc(v.variableName)}</button>`;
             }).join('')}
           </div>
           <div class="pairs-box" style="margin-top:0;margin-bottom:10px">
             <div class="wrap" style="margin-bottom:5px;align-items:center">
-              <span class="badge ${activeVar.pattern === 'cumulative_buildup' ? 'badge-cumulative' : activeVar.direction === 'trigger' ? 'badge-trigger' : 'badge-protective'}">${esc(activeVar.typicalLagDescription)}</span>
-              <span class="badge badge-neutral">r = ${activeVar.bestLag.score >= 0 ? '+' : ''}${activeVar.bestLag.score.toFixed(2)}</span>
-              ${G.renderInfoBtn('r_value', 'What is r?')}
+              <span class="badge ${humanStrength(activeVar).badge}">${humanStrength(activeVar).label}</span>
+              <span class="badge badge-neutral">⏱ ${esc(humanTiming(activeVar))}</span>
+              ${G.renderInfoBtn('r_value', 'How we score this')}
             </div>
-            <div style="font-size:12px;color:var(--text-sec)">${esc(activeVar.summary)}</div>
+            <div style="font-size:12.5px;color:var(--text)">${esc(humanTakeaway(activeVar, cond.name))}</div>
           </div>
           ${renderExposureFlareSVG(activeVar, state.showCumulative)}
-          <div class="divider-row" style="margin-top:12px">
-            <div class="row-between" style="margin-bottom:4px">
-              <div style="font-size:12.5px;font-weight:700">Lag Profile (Immediate vs. Delayed vs. Build-Up)</div>
-              <div class="wrap">${G.renderInfoBtn('lag_window', 'Lag')}${G.renderInfoBtn('cumulative_buildup', 'Build-Up')}</div>
-            </div>
-            ${renderLagProfileSVG(activeVar.allLags, activeVar.bestLag.lagKey)}
-          </div>
+          <button type="button" class="details-toggle" id="toggle-insight-lag-btn">
+            <span>Detailed Timing &amp; Statistical Breakdown</span>
+            <span>${state.showInsightLagChart ? '▴' : '▾'}</span>
+          </button>
+          ${state.showInsightLagChart ? `
+            <div style="margin-top:10px">
+              <div class="row-between" style="margin-bottom:4px">
+                <div style="font-size:12.5px;font-weight:700">Reaction Lag Profile (r = ${activeVar.bestLag.score >= 0 ? '+' : ''}${activeVar.bestLag.score.toFixed(2)})</div>
+                <div class="wrap">${G.renderInfoBtn('lag_window', 'Lag')}${G.renderInfoBtn('cumulative_buildup', 'Build-Up')}</div>
+              </div>
+              ${renderLagProfileSVG(activeVar.allLags, activeVar.bestLag.lagKey)}
+            </div>` : ''}
         </section>` : ''}
 
       ${activeReport && activeReport.topTriggers.length ? `
         <section class="card">
-          <div class="card-header"><div><h2 class="card-title">Top Suspected Triggers</h2></div></div>
-          ${activeReport.topTriggers.map((t, idx) => `
-            <div class="divider-row" data-pick-ivar="${esc(t.variableId)}" style="cursor:pointer">
+          <div class="card-header"><div><h2 class="card-title">Top Suspected Triggers</h2><p class="card-sub">Tap any trigger to view its exposure-to-flare graph above.</p></div></div>
+          ${activeReport.topTriggers.slice(0, 4).map((t, idx) => {
+            const hs = humanStrength(t);
+            return `<div class="divider-row" data-pick-ivar="${esc(t.variableId)}" style="cursor:pointer">
               <div class="row-between">
                 <b style="font-size:14px">${idx + 1}. ${esc(t.variableName)}</b>
-                <b style="color:var(--trigger)">r = +${t.bestLag.score.toFixed(2)}</b>
+                <span class="badge ${hs.badge}">${hs.label}</span>
               </div>
-              <div style="font-size:11.5px;font-weight:700;color:var(--primary-dark);margin-top:2px">${esc(t.typicalLagDescription)}</div>
-              <p class="card-sub">${esc(t.summary)}</p>
-            </div>`).join('')}
+              <div style="font-size:11.5px;font-weight:700;color:var(--primary-dark);margin-top:3px">⏱ ${esc(humanTiming(t))}</div>
+              <p class="card-sub">${esc(humanTakeaway(t, cond.name))}</p>
+            </div>`;
+          }).join('')}
         </section>` : ''}
 
       <section class="card">
@@ -1419,9 +1505,35 @@
     if (!file) return;
     const reader = new FileReader();
     reader.onload = async () => {
-      const dataUrl = String(reader.result || '');
-      const match = /^data:([^;]+);base64,(.*)$/.exec(dataUrl);
-      state.foodDraft.photoDataUrl = dataUrl;
+      const rawDataUrl = String(reader.result || '');
+      // Normalize & resize photo to clean <=1024px JPEG so large/HEIC phone photos never cause HTTP 400
+      let finalDataUrl = rawDataUrl;
+      try {
+        finalDataUrl = await new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxDim = 1024;
+            let w = img.naturalWidth || img.width;
+            let h = img.naturalHeight || img.height;
+            if (w > maxDim || h > maxDim) {
+              const ratio = Math.min(maxDim / w, maxDim / h);
+              w = Math.round(w * ratio);
+              h = Math.round(h * ratio);
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.82));
+          };
+          img.onerror = () => resolve(rawDataUrl);
+          img.src = rawDataUrl;
+        });
+      } catch (_) {}
+
+      const match = /^data:([^;]+);base64,(.*)$/.exec(finalDataUrl);
+      state.foodDraft.photoDataUrl = finalDataUrl;
       state.foodDraft.mimeType = match ? match[1] : 'image/jpeg';
       state.foodDraft.photoBase64 = match ? match[2] : '';
       await runFoodAnalyze();
@@ -1513,6 +1625,13 @@
     document.querySelectorAll('[data-custom-num]').forEach((el) => {
       el.addEventListener('input', () => (state.form.customVals[el.dataset.customNum] = el.value));
     });
+
+    const toggleMoreLife = document.getElementById('toggle-more-lifestyle');
+    if (toggleMoreLife) toggleMoreLife.addEventListener('click', () => { state.showMoreLifestyle = !state.showMoreLifestyle; render(); });
+    const toggleTechStats = document.getElementById('toggle-tech-stats-btn');
+    if (toggleTechStats) toggleTechStats.addEventListener('click', () => { state.showTechnicalStats = !state.showTechnicalStats; render(); });
+    const toggleInsightLag = document.getElementById('toggle-insight-lag-btn');
+    if (toggleInsightLag) toggleInsightLag.addEventListener('click', () => { state.showInsightLagChart = !state.showInsightLagChart; render(); });
 
     const gotoFood = document.getElementById('goto-food-btn');
     if (gotoFood) gotoFood.addEventListener('click', () => { state.activeTab = 'food'; render(); });
