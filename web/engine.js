@@ -150,6 +150,62 @@
       .replace(/^_+|_+$/g, '') || 'unknown_ingredient';
   }
 
+  function dedupeIngredients(rawList) {
+    const byKey = new Map();
+    const order = [];
+    const mergeList = (a, b) => {
+      const items = `${a || ''},${b || ''}`
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const seen = new Set();
+      return items
+        .filter((s) => {
+          const k = s.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        })
+        .join(', ');
+    };
+    (rawList || []).forEach((item, idx) => {
+      const rawName = String(item?.name || '').trim();
+      if (!rawName) return;
+      const key = item.normalizedKey || normalizeIngredientKey(rawName);
+      const parenMatch = /\(([^)]+)\)/.exec(rawName);
+      const baseName = rawName.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+      if (!byKey.has(key)) {
+        const entry = {
+          id: item.id || `gem_${Date.now()}_${idx}`,
+          name: rawName,
+          normalizedKey: key,
+          category: item.category || 'Ingredient',
+          commonEczemaTrigger: Boolean(item.commonEczemaTrigger),
+          triggerGroup: item.triggerGroup || '',
+          foundIn: String(item.foundIn || '').trim(),
+          notes: item.notes || '',
+          included: item.included !== false,
+          _baseName: baseName,
+        };
+        byKey.set(key, entry);
+        order.push(entry);
+      } else {
+        const existing = byKey.get(key);
+        existing.commonEczemaTrigger = existing.commonEczemaTrigger || Boolean(item.commonEczemaTrigger);
+        if (!existing.triggerGroup && item.triggerGroup) existing.triggerGroup = item.triggerGroup;
+        if (existing._baseName && existing.name.includes('(') && rawName.includes('(')) {
+          const prevParen = /\(([^)]+)\)/.exec(existing.name);
+          if (prevParen) existing.foundIn = mergeList(existing.foundIn, prevParen[1]);
+          if (parenMatch) existing.foundIn = mergeList(existing.foundIn, parenMatch[1]);
+          existing.name = existing._baseName;
+        }
+        if (item.foundIn) existing.foundIn = mergeList(existing.foundIn, item.foundIn);
+        if (!existing.notes && item.notes) existing.notes = item.notes;
+      }
+    });
+    return order.map(({ _baseName, ...clean }) => clean);
+  }
+
   function mean(arr) {
     return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
   }
@@ -1203,11 +1259,19 @@
         err.geminiError = { code: res.status, retriable: Boolean(data.retriable || res.status === 503), userMessage: msg };
         throw err;
       }
-      return data;
+      return {
+        ...data,
+        dishes: Array.isArray(data.dishes) ? data.dishes : [],
+        ingredients: dedupeIngredients(data.ingredients || []),
+      };
     }
 
     if (!apiKey || !apiKey.trim()) {
       const lower = (textHint || '').toLowerCase();
+      const splitDishes = (textHint || '')
+        .split(/[\n,]+|\s+and\s+/i)
+        .map((s) => s.trim())
+        .filter(Boolean);
       const mk = (name, cat, trig, grp, notes) => ({
         id: `prev_${normalizeIngredientKey(name)}_${Math.random().toString(36).slice(2, 6)}`,
         name, normalizedKey: normalizeIngredientKey(name), category: cat, commonEczemaTrigger: trig, triggerGroup: grp, notes, included: true,
@@ -1215,10 +1279,11 @@
       if (lower.includes('latte') || lower.includes('coffee')) {
         return {
           dishName: textHint || 'Iced Vanilla Latte',
+          dishes: splitDishes.length ? splitDishes : ['Iced Vanilla Latte'],
           mealType: 'beverage',
           confidence: 0.78,
           analyzedByGemini: false,
-          summary: 'Preview Mode (add Gemini API key in Settings for live AI vision).',
+          summary: 'Preview Mode (connect AI in Settings for live multi-dish parsing).',
           ingredients: [
             mk("Dairy (Cow's Milk)", 'Dairy', true, 'Dairy / Casein', 'Milk base'),
             mk('Caffeine', 'Beverage', false, '', 'Espresso'),
@@ -1228,10 +1293,11 @@
       }
       return {
         dishName: textHint || 'Scanned Meal (Preview Mode)',
+        dishes: splitDishes,
         mealType: 'lunch',
         confidence: 0.74,
         analyzedByGemini: false,
-        summary: 'Preview Mode active — add your Gemini API key in Settings for live photo ingredient recognition. Edit ingredients freely below.',
+        summary: 'Preview Mode active — connect AI in Settings for live photo & multi-dish ingredient recognition.',
         ingredients: [
           mk("Dairy (Cow's Milk)", 'Dairy', true, 'Dairy / Casein', 'Butter, cheese, or cream'),
           mk('Wheat / Gluten', 'Grain', true, 'Gluten', 'Bread, pasta, or flour'),
@@ -1242,8 +1308,11 @@
     }
 
     const prompt = `You are a health & nutrition assistant helping a user track food and beverage triggers for symptoms like eczema, stomach pain/GI issues, acne, migraines, and allergies.
-Identify the food or beverage and list ALL typical & hidden ingredients (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, nuts, nightshades/tomato, shellfish, citrus, high-FODMAP/garlic/onion, histamine-rich/fermented items, caffeine, alcohol, refined sugar, spicy peppers, seed/cooking oils).
-Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Gluten", "Tomato (Nightshade)", "Soy", "Eggs"). Return ONLY valid JSON.`;
+The user may provide a photo and/or text describing ONE OR MULTIPLE dishes, sides, and beverages eaten together (separated by commas, "and", or new lines).
+1. Identify EVERY dish and beverage mentioned or pictured and list them in the "dishes" array.
+2. List ALL typical & hidden ingredients across ALL dishes (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, nuts, nightshades/tomato, shellfish, citrus, high-FODMAP/garlic/onion, histamine-rich/fermented items, caffeine, alcohol, refined sugar, spicy peppers, seed/cooking oils).
+3. DEDUPLICATE shared ingredients across dishes: output ONE normalized ingredient entry (e.g., "Dairy (Cow's Milk)", "Wheat / Gluten", "Tomato (Nightshade)", "Soy", "Eggs") and list the dish names in "foundIn".
+4. Set "dishName" to a concise combined title for all dishes. Return ONLY valid JSON.`;
 
     const parts = [{ text: prompt }];
     if (textHint && textHint.trim()) parts.push({ text: `User description: ${textHint.trim()}` });
@@ -1253,6 +1322,7 @@ Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Glute
       type: 'OBJECT',
       properties: {
         dishName: { type: 'STRING' },
+        dishes: { type: 'ARRAY', items: { type: 'STRING' } },
         mealType: { type: 'STRING', enum: ['breakfast', 'lunch', 'dinner', 'snack', 'beverage'] },
         confidence: { type: 'NUMBER' },
         summary: { type: 'STRING' },
@@ -1265,6 +1335,7 @@ Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Glute
               category: { type: 'STRING' },
               commonEczemaTrigger: { type: 'BOOLEAN' },
               triggerGroup: { type: 'STRING' },
+              foundIn: { type: 'STRING' },
               notes: { type: 'STRING' },
             },
             required: ['name', 'category', 'commonEczemaTrigger'],
@@ -1291,9 +1362,13 @@ Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Glute
     const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!raw) throw new Error('Gemini returned an empty response. Please retry or log ingredients manually.');
     const parsed = JSON.parse(raw);
+    const dishes = Array.isArray(parsed.dishes)
+      ? parsed.dishes.map((d) => String(d || '').trim()).filter(Boolean)
+      : [];
 
     return {
-      dishName: parsed.dishName || textHint || 'Scanned Meal',
+      dishName: parsed.dishName || (dishes.length ? dishes.join(', ') : textHint) || 'Scanned Meal',
+      dishes,
       mealType: parsed.mealType || 'lunch',
       confidence: parsed.confidence || 0.88,
       summary: callResult.usedBackupModel
@@ -1302,16 +1377,7 @@ Normalize recurring ingredient names (e.g., "Dairy (Cow's Milk)", "Wheat / Glute
       analyzedByGemini: true,
       resolvedModel: callResult.resolvedModel,
       shouldPersistModel: callResult.shouldPersistModel,
-      ingredients: (parsed.ingredients || []).map((item, idx) => ({
-        id: `gem_${Date.now()}_${idx}`,
-        name: item.name,
-        normalizedKey: normalizeIngredientKey(item.name),
-        category: item.category || 'Ingredient',
-        commonEczemaTrigger: Boolean(item.commonEczemaTrigger),
-        triggerGroup: item.triggerGroup || '',
-        notes: item.notes || '',
-        included: true,
-      })),
+      ingredients: dedupeIngredients(parsed.ingredients || []),
     };
   }
 

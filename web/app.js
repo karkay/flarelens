@@ -92,6 +92,7 @@
       mimeType: 'image/jpeg',
       textHint: '',
       dishName: '',
+      dishes: [],
       mealType: 'lunch',
       summary: '',
       analyzedByGemini: false,
@@ -696,26 +697,41 @@
         </div>`;
 
     const shortTriggerSub = (ing) => {
+      const fromDishes = (ing.foundIn || '').trim();
       const grp = (ing.triggerGroup || '').trim();
-      if (!grp) return '';
       const nameLower = (ing.name || '').trim().toLowerCase();
-      if (grp.toLowerCase() === nameLower) return '';
-      const parts = grp
-        .split(/[\/,]/)
-        .map((p) => p.trim())
-        .filter((p) => p && p.toLowerCase() !== nameLower);
-      const concise = (parts.length ? parts.slice(0, 2).join(' · ') : grp).trim();
-      return concise.length > 28 ? parts[0] || concise.slice(0, 26).trim() : concise;
+      let grpClean = '';
+      if (grp && grp.toLowerCase() !== nameLower) {
+        const parts = grp
+          .split(/[\/,]/)
+          .map((p) => p.trim())
+          .filter((p) => p && p.toLowerCase() !== nameLower);
+        const concise = (parts.length ? parts.slice(0, 2).join(' · ') : grp).trim();
+        grpClean = concise.length > 26 ? parts[0] || concise.slice(0, 24).trim() : concise;
+      }
+      if (fromDishes && d.dishes && d.dishes.length > 1) {
+        return grpClean ? `${grpClean} · ${fromDishes}` : `From: ${fromDishes}`;
+      }
+      return grpClean || (fromDishes ? `From: ${fromDishes}` : '');
     };
 
     let draftHtml = '';
     if (d.analyzing) {
-      draftHtml = `<section class="card" style="text-align:center;padding:22px">
-        <div style="font-weight:700;color:var(--primary-dark)">✨ Analyzing your meal…</div>
-        <p class="card-sub" style="margin-top:6px">Identifying ingredients and common triggers.</p>
+      draftHtml = `<section class="card scan-progress-card" id="food-scan-progress" aria-live="polite">
+        <div class="scan-bar-track"><div class="scan-bar-fill"></div></div>
+        <div class="row" style="align-items:center;gap:11px;margin-top:4px">
+          <span class="spinner-teal"></span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14.5px;font-weight:800;color:var(--primary-dark)">Scanning your meal…</div>
+            <div style="font-size:12px;color:var(--text-sec);margin-top:1px">${esc(d.statusMessage || 'Identifying dishes and ingredients…')}</div>
+          </div>
+        </div>
+        <div class="skeleton-row" style="margin-top:12px"></div>
+        <div class="skeleton-row" style="animation-delay:0.2s"></div>
+        <div class="skeleton-row" style="animation-delay:0.4s"></div>
       </section>`;
     } else if (d.errorMessage) {
-      draftHtml = `<section class="card" style="border-color:#F3D299;background:var(--warning-light)">
+      draftHtml = `<section class="card" id="food-error-card" style="border-color:#F3D299;background:var(--warning-light)">
         <div style="font-size:14px;font-weight:800;color:var(--warning);margin-bottom:4px">⚠️ Couldn't Analyze Right Now</div>
         <p class="card-sub" style="color:var(--text);margin-bottom:12px">${esc(d.errorMessage)}</p>
         <div class="row">
@@ -733,14 +749,18 @@
       ];
       const activeCnt = d.ingredients.filter((i) => i.included).length;
       const triggerCnt = d.ingredients.filter((i) => i.included && i.commonEczemaTrigger).length;
-      draftHtml = `<section class="card">
+      const dishCount = Array.isArray(d.dishes) ? d.dishes.length : 0;
+      draftHtml = `<section class="card" id="food-review-card">
         <div class="card-header" style="margin-bottom:8px">
           <div>
             <h2 class="card-title">Review Ingredients</h2>
-            <p class="card-sub">${activeCnt} selected${triggerCnt ? ` · ${triggerCnt} common trigger${triggerCnt > 1 ? 's' : ''}` : ''}</p>
+            <p class="card-sub">${dishCount > 1 ? `${dishCount} dishes · ` : ''}${activeCnt} ingredient${activeCnt === 1 ? '' : 's'}${triggerCnt ? ` · ${triggerCnt} trigger${triggerCnt > 1 ? 's' : ''}` : ''}</p>
           </div>
           <span class="badge ${d.analyzedByGemini ? 'badge-primary' : 'badge-neutral'}">${d.analyzedByGemini ? 'AI Scan' : 'Preview'}</span>
         </div>
+        ${dishCount > 1 ? `<div class="wrap" style="margin-bottom:8px">
+          ${d.dishes.map((dn) => `<span class="dish-chip">🍽 ${esc(dn)}</span>`).join('')}
+        </div>` : ''}
         <label class="field-label">Meal Name</label>
         <input class="input" id="draft-dish" value="${esc(d.dishName)}" />
         <label class="field-label">Meal Type</label>
@@ -773,24 +793,24 @@
         <div class="card-header" style="margin-bottom:10px">
           <div>
             <h2 class="card-title">Scan a Meal</h2>
-            <p class="card-sub">Snap a photo or type what you ate to log ingredients.</p>
+            <p class="card-sub">Snap a photo or list one or more dishes you ate.</p>
           </div>
         </div>
         <div class="food-capture-grid">
-          <label class="food-capture-btn btn-primary">
+          <label class="food-capture-btn btn-primary ${d.analyzing ? 'disabled' : ''}">
             📷 Take Photo
-            <input type="file" accept="image/*" capture="environment" id="camera-input" style="display:none" />
+            <input type="file" accept="image/*" capture="environment" id="camera-input" ${d.analyzing ? 'disabled' : ''} style="display:none" />
           </label>
-          <label class="food-capture-btn btn-secondary">
+          <label class="food-capture-btn btn-secondary ${d.analyzing ? 'disabled' : ''}">
             🖼 Library
-            <input type="file" accept="image/*" id="library-input" style="display:none" />
+            <input type="file" accept="image/*" id="library-input" ${d.analyzing ? 'disabled' : ''} style="display:none" />
           </label>
         </div>
         ${d.photoDataUrl ? `<img src="${d.photoDataUrl}" class="photo-preview" alt="Meal preview" />` : ''}
-        <div class="row">
-          <input class="input" id="food-hint-input" value="${esc(d.textHint)}" placeholder="Or type food (e.g. iced latte, pasta)" />
-          <button class="btn btn-primary btn-sm" id="analyze-food-btn" style="padding:11px 14px;border-radius:11px">✨ Scan</button>
-        </div>
+        <textarea class="input" id="food-hint-input" rows="2" ${d.analyzing ? 'disabled' : ''} placeholder="Or list dishes (e.g. iced latte, scrambled eggs, sourdough toast)">${esc(d.textHint)}</textarea>
+        <button class="btn btn-primary" id="analyze-food-btn" style="margin-top:8px" ${d.analyzing ? 'disabled' : ''}>
+          ${d.analyzing ? '<span class="spinner"></span> Scanning…' : (d.photoDataUrl ? '✨ Scan Photo & Dishes' : '✨ Scan Dishes')}
+        </button>
       </section>
 
       ${draftHtml}
@@ -1523,6 +1543,14 @@
 
   function handleFileChosen(file) {
     if (!file) return;
+    // Show immediate visual scanning feedback before image resize even finishes
+    state.foodDraft.analyzing = true;
+    state.foodDraft.errorMessage = '';
+    state.foodDraft.statusMessage = 'Preparing photo…';
+    render();
+    const progEl = document.getElementById('food-scan-progress');
+    if (progEl) progEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
     const reader = new FileReader();
     reader.onload = async () => {
       const rawDataUrl = String(reader.result || '');
@@ -1562,11 +1590,20 @@
   }
 
   async function runFoodAnalyze() {
+    if (document.activeElement && typeof document.activeElement.blur === 'function') {
+      document.activeElement.blur();
+    }
     state.foodDraft.analyzing = true;
     state.foodDraft.errorMessage = '';
     state.foodDraft.errorRetriable = false;
-    state.foodDraft.statusMessage = `Analyzing with ${state.settings.geminiModel}…`;
+    state.foodDraft.statusMessage = state.foodDraft.photoBase64
+      ? 'Analyzing meal photo & dishes…'
+      : 'Parsing dishes & ingredients…';
     render();
+    showToast('Scanning your meal…');
+    const progEl = document.getElementById('food-scan-progress');
+    if (progEl) progEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
     try {
       const res = await E.analyzeFoodWithGemini({
         apiKey: state.settings.geminiApiKey,
@@ -1587,6 +1624,7 @@
       }
       Object.assign(state.foodDraft, {
         dishName: res.dishName,
+        dishes: Array.isArray(res.dishes) ? res.dishes : [],
         mealType: res.mealType,
         summary: res.summary,
         analyzedByGemini: res.analyzedByGemini,
@@ -1596,14 +1634,18 @@
         statusMessage: '',
         errorMessage: '',
       });
+      const dishPrefix = state.foodDraft.dishes.length > 1 ? `Parsed ${state.foodDraft.dishes.length} dishes · ` : '';
+      showToast(`${dishPrefix}Found ${state.foodDraft.ingredients.length} ingredients`);
     } catch (err) {
       state.foodDraft.analyzing = false;
       state.foodDraft.statusMessage = '';
       state.foodDraft.errorMessage = err.message || 'Gemini analysis failed. You can retry or log ingredients manually.';
       state.foodDraft.errorRetriable = Boolean(err?.geminiError?.retriable);
-      showToast('Gemini busy — retry or log manually');
+      showToast('Scan failed — retry or log manually');
     }
     render();
+    const reviewEl = document.getElementById('food-review-card') || document.getElementById('food-error-card');
+    if (reviewEl) reviewEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
   function wireEvents() {
@@ -1881,7 +1923,7 @@
             source: state.foodDraft.analyzedByGemini ? 'gemini_vision' : 'manual', foodEntryId: fid,
           });
         });
-        state.foodDraft = { photoDataUrl: '', photoBase64: '', mimeType: 'image/jpeg', textHint: '', dishName: '', mealType: 'lunch', summary: '', analyzedByGemini: false, confidence: 0, ingredients: [], analyzing: false, statusMessage: '', errorMessage: '', errorRetriable: false };
+        state.foodDraft = { photoDataUrl: '', photoBase64: '', mimeType: 'image/jpeg', textHint: '', dishName: '', dishes: [], mealType: 'lunch', summary: '', analyzedByGemini: false, confidence: 0, ingredients: [], analyzing: false, statusMessage: '', errorMessage: '', errorRetriable: false };
         persist();
         showToast(`Logged meal & ${active.length} ingredient variables`);
         render();
