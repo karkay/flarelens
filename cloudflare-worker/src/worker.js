@@ -54,7 +54,10 @@ const FOOD_RESPONSE_SCHEMA = {
 };
 
 function cleanSecret(val) {
-  return String(val || '').trim().replace(/^["']|["']$/g, '').trim();
+  let s = String(val || '').trim().replace(/^["']|["']$/g, '').trim();
+  s = s.replace(/^(GEMINI_API_KEY|API_KEY|KEY)\s*=\s*/i, '').replace(/^Bearer\s+/i, '').trim();
+  s = s.replace(/^["']|["']$/g, '').trim();
+  return s;
 }
 function sanitizeModel(model) {
   if (!model || DEPRECATED_MODELS.has(model)) return DEFAULT_MODEL;
@@ -188,7 +191,9 @@ async function discoverBackupModels(apiKey, excludeSet) {
     (m) => !excludeSet.has(m)
   );
   try {
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`);
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models', {
+      headers: { 'x-goog-api-key': apiKey },
+    });
     if (!res.ok) return fallbacks;
     const data = await res.json();
     const list = (data.models || [])
@@ -220,16 +225,17 @@ async function callGeminiServerSide(apiKey, requestedModel, payload, maxRetriesP
   let lastStatus = 503;
   let lastBody = '';
   const tryModel = async (model, retries, activePayload) => {
-    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    const headers = { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey };
     for (let attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) await sleep((attempt === 1 ? 1100 : 2500) + Math.floor(Math.random() * 350));
-      const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(activePayload) });
+      const res = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(activePayload) });
       if (res.ok) return { ok: true, response: res, model };
       lastStatus = res.status;
       lastBody = await res.text().catch(() => '');
       if (res.status === 400 && activePayload?.generationConfig?.responseSchema && /schema/i.test(lastBody)) {
         const relaxed = { ...activePayload, generationConfig: { responseMimeType: 'application/json' } };
-        const res2 = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(relaxed) });
+        const res2 = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(relaxed) });
         if (res2.ok) return { ok: true, response: res2, model };
         lastStatus = res2.status;
         lastBody = await res2.text().catch(() => '');
