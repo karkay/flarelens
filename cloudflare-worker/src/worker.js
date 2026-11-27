@@ -20,13 +20,39 @@ const DEPRECATED_MODELS = new Set([
 const RETRIABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 const SESSION_TTL_SEC = 12 * 60 * 60;
 
-const FOOD_PROMPT = `You are a health and nutrition assistant helping a user track food and beverage triggers for symptoms such as eczema, stomach pain/GI issues, acne, migraines, and allergies.
-The user may provide a photo and/or text describing ONE OR MULTIPLE dishes, sides, and beverages eaten together (separated by commas, "and", or new lines).
-1. Identify EVERY dish and beverage mentioned or pictured and list them in the "dishes" array.
-2. Extract ALL typical & hidden ingredients across ALL dishes (dairy/milk/butter/cheese, wheat/gluten, soy, eggs, tree nuts, peanuts, shellfish, nightshades/tomato, citrus, high-FODMAP/garlic/onion, histamine-rich/fermented items, caffeine, alcohol, refined sugar, spicy peppers, cooking oils, additives).
-3. DEDUPLICATE shared ingredients across dishes: if two dishes share an ingredient (e.g., butter/cheese in two dishes, or wheat in both pasta and garlic bread), output ONE normalized ingredient entry (e.g., "Dairy (Cow's Milk)", "Wheat / Gluten", "Tomato (Nightshade)", "Soy", "Eggs") instead of splitting by dish, and list the dish names in "foundIn" (e.g., "Tomato Pasta, Garlic Bread").
-4. Set "dishName" to a concise combined title for all dishes (e.g., "Tomato Pasta, Garlic Bread & Iced Latte").
-Return ONLY valid JSON with keys: dishName (string), dishes (string[]), mealType ("breakfast"|"lunch"|"dinner"|"snack"|"beverage"), confidence (number 0-1), summary (string), ingredients (array of { name, category, commonEczemaTrigger (boolean), triggerGroup (string), foundIn (string), notes (string) }).`;
+const TRIGGER_GROUPS = [
+  'None',
+  'Dairy',
+  'Gluten / Wheat',
+  'Shellfish',
+  'Fish',
+  'Eggs',
+  'Soy',
+  'Nuts',
+  'Nightshades',
+  'Citrus',
+  'Garlic / Onion',
+  'Histamine / Fermented',
+  'Caffeine',
+  'Alcohol',
+  'Sugar',
+  'Spicy',
+  'Cooking Oils',
+  'Additives',
+  'Other',
+];
+
+const FOOD_PROMPT = `You are a nutrition assistant helping track food and beverage ingredients.
+The user may provide a photo and/or text describing ONE OR MULTIPLE dishes, sides, and beverages eaten together.
+Rules:
+1. List every dish/beverage in "dishes" (short names, 1-4 words each).
+2. Extract ALL typical & hidden ingredients across ALL dishes (dairy, wheat/gluten, shellfish, fish, soy, eggs, nuts, nightshades/tomato, citrus, garlic/onion, fermented/histamine, caffeine, alcohol, sugar, spicy peppers, cooking oils).
+3. DEDUPLICATE shared ingredients across dishes into ONE clean entry (e.g., "Dairy", "Wheat / Gluten", "Shrimp", "Tomato", "Soy", "Eggs").
+4. Keep every string short and clean (under 5 words). Never repeat words.
+5. Set "triggerGroup" strictly from the allowed enum list (use "None" if not a common trigger).
+6. Set "foundIn" to an array of 1-3 short dish names from "dishes" where this ingredient appears.
+7. Set "dishName" to a short combined meal title (under 8 words).
+Return ONLY valid JSON.`;
 
 const FOOD_RESPONSE_SCHEMA = {
   type: 'OBJECT',
@@ -41,7 +67,6 @@ const FOOD_RESPONSE_SCHEMA = {
       enum: ['breakfast', 'lunch', 'dinner', 'snack', 'beverage'],
     },
     confidence: { type: 'NUMBER' },
-    summary: { type: 'STRING' },
     ingredients: {
       type: 'ARRAY',
       items: {
@@ -50,15 +75,17 @@ const FOOD_RESPONSE_SCHEMA = {
           name: { type: 'STRING' },
           category: { type: 'STRING' },
           commonEczemaTrigger: { type: 'BOOLEAN' },
-          triggerGroup: { type: 'STRING' },
-          foundIn: { type: 'STRING' },
-          notes: { type: 'STRING' },
+          triggerGroup: { type: 'STRING', enum: TRIGGER_GROUPS },
+          foundIn: {
+            type: 'ARRAY',
+            items: { type: 'STRING' },
+          },
         },
-        required: ['name', 'category', 'commonEczemaTrigger'],
+        required: ['name', 'category', 'commonEczemaTrigger', 'triggerGroup'],
       },
     },
   },
-  required: ['dishName', 'mealType', 'confidence', 'summary', 'ingredients'],
+  required: ['dishName', 'mealType', 'ingredients'],
 };
 
 function cleanSecret(val) {
@@ -80,38 +107,69 @@ function normalizeIngredientKey(name) {
       .replace(/^_+|_+$/g, '') || 'unknown_ingredient'
   );
 }
+function sanitizeShortLabel(text, maxLen = 40) {
+  let s = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+  // Detect and discard LLM structured-output repetition loops / schema-keyword leaks
+  const words = s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (words.length >= 6) {
+    const uniqueRatio = new Set(words).size / words.length;
+    if (uniqueRatio < 0.58) return '';
+    const leakHits = words.filter((w) =>
+      /^(trigger|group|setup|key|standard|reference|identifier|logic|schema|enum|field|property|object|array|string|boolean|track|value)$/.test(w)
+    ).length;
+    if (leakHits >= 3) return '';
+  }
+  // Remove immediate adjacent repeated words
+  s = s.replace(/\b([a-z0-9]+)(?:[\s,/.-]+\1\b)+/gi, '$1').trim();
+  if (s.length > maxLen) {
+    const cut = s.slice(0, maxLen).replace(/\s+\S*$/, '').trim();
+    s = cut || s.slice(0, maxLen).trim();
+  }
+  return s;
+}
+function sanitizeTriggerGroup(val) {
+  const s = sanitizeShortLabel(val, 24);
+  if (!s || /^none$/i.test(s) || /^other$/i.test(s)) return '';
+  return s;
+}
+function normalizeFoundIn(val) {
+  const arr = Array.isArray(val) ? val : String(val || '').split(',');
+  const seen = new Set();
+  const clean = [];
+  for (const part of arr) {
+    const item = sanitizeShortLabel(part, 28);
+    if (!item) continue;
+    const k = item.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    clean.push(item);
+    if (clean.length >= 3) break;
+  }
+  return clean.join(', ');
+}
 function dedupeIngredients(rawList) {
   const byKey = new Map();
   const order = [];
-  const mergeList = (a, b) => {
-    const items = `${a || ''},${b || ''}`
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const seen = new Set();
-    return items.filter((s) => {
-      const k = s.toLowerCase();
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    }).join(', ');
-  };
+  const mergeList = (a, b) => normalizeFoundIn(`${a || ''},${b || ''}`);
   (rawList || []).forEach((item, idx) => {
-    const rawName = String(item?.name || '').trim();
+    const rawName = sanitizeShortLabel(item?.name || '', 44);
     if (!rawName) return;
     const key = normalizeIngredientKey(rawName);
     const parenMatch = /\(([^)]+)\)/.exec(rawName);
     const baseName = rawName.replace(/\s*\([^)]*\)\s*/g, ' ').trim();
+    const cleanGroup = sanitizeTriggerGroup(item?.triggerGroup);
+    const cleanFoundIn = normalizeFoundIn(item?.foundIn);
     if (!byKey.has(key)) {
       const entry = {
         id: `gem_${Date.now()}_${idx}`,
         name: rawName,
         normalizedKey: key,
-        category: item.category || 'Ingredient',
+        category: sanitizeShortLabel(item.category || 'Ingredient', 24) || 'Ingredient',
         commonEczemaTrigger: Boolean(item.commonEczemaTrigger),
-        triggerGroup: item.triggerGroup || '',
-        foundIn: String(item.foundIn || '').trim(),
-        notes: item.notes || '',
+        triggerGroup: cleanGroup,
+        foundIn: cleanFoundIn,
+        notes: '',
         included: true,
         _mergedCount: 1,
         _baseName: baseName,
@@ -122,16 +180,14 @@ function dedupeIngredients(rawList) {
       const existing = byKey.get(key);
       existing._mergedCount += 1;
       existing.commonEczemaTrigger = existing.commonEczemaTrigger || Boolean(item.commonEczemaTrigger);
-      if (!existing.triggerGroup && item.triggerGroup) existing.triggerGroup = item.triggerGroup;
-      // When duplicates like "Wheat / Gluten (Pasta)" & "Wheat / Gluten (Bread)" merge, use clean base name
+      if (!existing.triggerGroup && cleanGroup) existing.triggerGroup = cleanGroup;
       if (existing._baseName && existing.name.includes('(') && rawName.includes('(')) {
         const prevParen = /\(([^)]+)\)/.exec(existing.name);
         if (prevParen) existing.foundIn = mergeList(existing.foundIn, prevParen[1]);
         if (parenMatch) existing.foundIn = mergeList(existing.foundIn, parenMatch[1]);
         existing.name = existing._baseName;
       }
-      if (item.foundIn) existing.foundIn = mergeList(existing.foundIn, item.foundIn);
-      if (!existing.notes && item.notes) existing.notes = item.notes;
+      if (cleanFoundIn) existing.foundIn = mergeList(existing.foundIn, cleanFoundIn);
     }
   });
   return order.map(({ _mergedCount, _baseName, ...clean }) => clean);
@@ -298,7 +354,7 @@ async function callGeminiServerSide(apiKey, requestedModel, payload, maxRetriesP
       lastStatus = res.status;
       lastBody = await res.text().catch(() => '');
       if (res.status === 400 && activePayload?.generationConfig?.responseSchema && /schema/i.test(lastBody)) {
-        const relaxed = { ...activePayload, generationConfig: { responseMimeType: 'application/json' } };
+        const relaxed = { ...activePayload, generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4096 } };
         const res2 = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(relaxed) });
         if (res2.ok) return { ok: true, response: res2, model };
         lastStatus = res2.status;
@@ -328,118 +384,131 @@ function parseJsonFromGeminiText(rawText) {
 }
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-    const path = url.pathname.replace(/\/+$/, '') || '/';
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request, env) });
-    const apiKey = cleanSecret(env.GEMINI_API_KEY);
-    const appPassword = cleanSecret(env.APP_PASSWORD);
-    if (path === '/health' && request.method === 'GET') {
-      return jsonResponse({ ok: true, service: 'flarelens-gemini-proxy', configured: Boolean(apiKey && appPassword) }, 200, request, env);
-    }
-    if (!appPassword || !apiKey) {
-      return jsonResponse({ error: 'Worker secrets not configured yet. Set GEMINI_API_KEY and APP_PASSWORD.' }, 500, request, env);
-    }
-    if (path === '/auth/login' && request.method === 'POST') {
-      const body = await request.json().catch(() => null);
-      if (!body) return jsonResponse({ error: 'Invalid JSON body.' }, 400, request, env);
-      const ok = await verifyPasswordConstantTime(body.password || '', appPassword);
-      if (!ok) {
-        await sleep(450);
-        return jsonResponse({ error: 'Incorrect password.' }, 401, request, env);
+    try {
+      const url = new URL(request.url);
+      const path = url.pathname.replace(/\/+$/, '') || '/';
+      if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request, env) });
+      const apiKey = cleanSecret(env.GEMINI_API_KEY);
+      const appPassword = cleanSecret(env.APP_PASSWORD);
+      if (path === '/health' && request.method === 'GET') {
+        return jsonResponse({ ok: true, service: 'flarelens-gemini-proxy', configured: Boolean(apiKey && appPassword) }, 200, request, env);
       }
-      const session = await issueSessionToken(env);
-      return jsonResponse({ ok: true, ...session }, 200, request, env);
-    }
-    const authHeader = request.headers.get('Authorization') || '';
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
-    if (!(await verifySessionToken(token, env))) {
-      return jsonResponse({ error: 'Unauthorized or expired session. Please sign in again.' }, 401, request, env);
-    }
-    if (path === '/auth/verify' && request.method === 'POST') return jsonResponse({ ok: true }, 200, request, env);
-    if (path === '/gemini/test' && request.method === 'POST') {
-      const body = await request.json().catch(() => ({}));
-      const result = await callGeminiServerSide(apiKey, body?.model || DEFAULT_MODEL, { contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }] }, 1);
-      if (!result.ok) {
-        const detail = extractSafeGeminiError(result.errorBody, apiKey);
+      if (!appPassword || !apiKey) {
+        return jsonResponse({ error: 'Meal scanner is not configured yet.' }, 500, request, env);
+      }
+      if (path === '/auth/login' && request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        if (!body) return jsonResponse({ error: 'Invalid request.' }, 400, request, env);
+        const ok = await verifyPasswordConstantTime(body.password || '', appPassword);
+        if (!ok) {
+          await sleep(450);
+          return jsonResponse({ error: 'Incorrect password.' }, 401, request, env);
+        }
+        const session = await issueSessionToken(env);
+        return jsonResponse({ ok: true, ...session }, 200, request, env);
+      }
+      const authHeader = request.headers.get('Authorization') || '';
+      const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      if (!(await verifySessionToken(token, env))) {
+        return jsonResponse({ error: 'Your session expired. Please sign in again.' }, 401, request, env);
+      }
+      if (path === '/auth/verify' && request.method === 'POST') return jsonResponse({ ok: true }, 200, request, env);
+      if (path === '/gemini/test' && request.method === 'POST') {
+        const body = await request.json().catch(() => ({}));
+        const result = await callGeminiServerSide(apiKey, body?.model || DEFAULT_MODEL, { contents: [{ role: 'user', parts: [{ text: 'Reply with OK' }] }] }, 1);
+        if (!result.ok) {
+          return jsonResponse(
+            {
+              ok: false,
+              code: result.status,
+              error:
+                result.status === 503
+                  ? 'Meal scanner is busy right now. Try again in a moment.'
+                  : 'Unable to reach the meal scanner right now.',
+            },
+            result.status || 502,
+            request,
+            env
+          );
+        }
         return jsonResponse(
           {
-            ok: false,
-            code: result.status,
-            model: result.model,
-            error:
-              result.status === 503
-                ? 'Gemini is currently experiencing high demand (HTTP 503).'
-                : `Gemini API HTTP ${result.status} (${result.model}): ${detail || 'Request failed'}`,
+            ok: true,
+            resolvedModel: result.resolvedModel,
+            usedBackupModel: result.usedBackupModel,
+            message: 'Meal scanner is connected and ready!',
           },
-          result.status || 502,
+          200,
           request,
           env
         );
       }
-      return jsonResponse(
-        {
-          ok: true,
-          resolvedModel: result.resolvedModel,
-          usedBackupModel: result.usedBackupModel,
-          message: result.usedBackupModel ? `Connected via backup model ${result.resolvedModel}!` : `Connected via ${result.resolvedModel}!`,
-        },
-        200,
-        request,
-        env
-      );
-    }
-    if (path === '/gemini/food-analyze' && request.method === 'POST') {
-      const body = await request.json().catch(() => null);
-      if (!body) return jsonResponse({ error: 'Invalid JSON payload.' }, 400, request, env);
-      const { model, imageBase64, mimeType = 'image/jpeg', textHint } = body;
-      if (!imageBase64 && !(textHint && String(textHint).trim())) {
-        return jsonResponse({ error: 'Provide either a food photo or a description.' }, 400, request, env);
+      if (path === '/gemini/food-analyze' && request.method === 'POST') {
+        const body = await request.json().catch(() => null);
+        if (!body) return jsonResponse({ error: 'Invalid request.' }, 400, request, env);
+        const { model, imageBase64, mimeType = 'image/jpeg', textHint } = body;
+        if (!imageBase64 && !(textHint && String(textHint).trim())) {
+          return jsonResponse({ error: 'Add a photo or describe what you ate first.' }, 400, request, env);
+        }
+        const safeMime = /^image\/(jpeg|png|webp|gif)$/i.test(String(mimeType)) ? String(mimeType) : 'image/jpeg';
+        const parts = [{ text: FOOD_PROMPT }];
+        if (textHint && String(textHint).trim()) parts.push({ text: `User description: ${String(textHint).trim()}` });
+        if (imageBase64) parts.push({ inlineData: { mimeType: safeMime, data: String(imageBase64) } });
+        const payload = {
+          contents: [{ role: 'user', parts }],
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: FOOD_RESPONSE_SCHEMA,
+            maxOutputTokens: 4096,
+          },
+        };
+        const result = await callGeminiServerSide(apiKey, model || DEFAULT_MODEL, payload, 2);
+        if (!result.ok) {
+          const msg =
+            result.status === 503 || result.status === 524
+              ? 'Meal scanning is busy right now. Please try again in a moment, or log manually.'
+              : result.status === 429
+              ? 'Too many scans at once. Please wait a moment and try again.'
+              : 'Unable to scan right now. Please try again or log manually.';
+          return jsonResponse({ error: msg, code: result.status, retriable: RETRIABLE_STATUSES.has(result.status) }, result.status || 502, request, env);
+        }
+        const gemJson = await result.response.json().catch(() => null);
+        const rawText = gemJson?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!rawText) return jsonResponse({ error: 'Could not read that meal. Please try again or log manually.' }, 502, request, env);
+        let parsed;
+        try {
+          parsed = parseJsonFromGeminiText(rawText);
+        } catch {
+          return jsonResponse({ error: 'Could not read that meal cleanly. Please try again or log manually.', retriable: true }, 502, request, env);
+        }
+        const ingredients = dedupeIngredients(parsed.ingredients || []);
+        const dishes = Array.isArray(parsed.dishes)
+          ? parsed.dishes.map((d) => sanitizeShortLabel(d, 36)).filter(Boolean).slice(0, 8)
+          : [];
+        const cleanDishName =
+          sanitizeShortLabel(parsed.dishName, 64) ||
+          (dishes.length ? sanitizeShortLabel(dishes.join(', '), 64) : sanitizeShortLabel(textHint, 64)) ||
+          'Scanned Meal';
+        return jsonResponse(
+          {
+            dishName: cleanDishName,
+            dishes,
+            mealType: parsed.mealType || 'lunch',
+            confidence: parsed.confidence || 0.88,
+            summary: 'Ingredients detected.',
+            analyzedByGemini: true,
+            resolvedModel: result.resolvedModel,
+            usedBackupModel: result.usedBackupModel,
+            ingredients,
+          },
+          200,
+          request,
+          env
+        );
       }
-      const safeMime = /^image\/(jpeg|png|webp|gif)$/i.test(String(mimeType)) ? String(mimeType) : 'image/jpeg';
-      const parts = [{ text: FOOD_PROMPT }];
-      if (textHint && String(textHint).trim()) parts.push({ text: `User description: ${String(textHint).trim()}` });
-      if (imageBase64) parts.push({ inlineData: { mimeType: safeMime, data: String(imageBase64) } });
-      const payload = {
-        contents: [{ role: 'user', parts }],
-        generationConfig: { responseMimeType: 'application/json', responseSchema: FOOD_RESPONSE_SCHEMA },
-      };
-      const result = await callGeminiServerSide(apiKey, model || DEFAULT_MODEL, payload, 2);
-      if (!result.ok) {
-        const detail = extractSafeGeminiError(result.errorBody, apiKey);
-        const msg =
-          result.status === 503
-            ? 'Gemini is experiencing temporary high demand (HTTP 503). Retries and backup models were also busy—please retry or log ingredients manually.'
-            : result.status === 429
-            ? 'Gemini rate limit reached (HTTP 429). Please wait a moment and retry.'
-            : `Gemini API HTTP ${result.status} (${result.model}): ${detail || 'Request failed'}`;
-        return jsonResponse({ error: msg, code: result.status, retriable: RETRIABLE_STATUSES.has(result.status) }, result.status || 502, request, env);
-      }
-      const gemJson = await result.response.json();
-      const rawText = gemJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!rawText) return jsonResponse({ error: 'Gemini returned an empty response.' }, 502, request, env);
-      const parsed = parseJsonFromGeminiText(rawText);
-      const ingredients = dedupeIngredients(parsed.ingredients || []);
-      const dishes = Array.isArray(parsed.dishes)
-        ? parsed.dishes.map((d) => String(d || '').trim()).filter(Boolean)
-        : [];
-      const baseSummary = parsed.summary || 'Ingredients extracted securely.';
-      return jsonResponse(
-        {
-          dishName: parsed.dishName || (dishes.length ? dishes.join(', ') : textHint) || 'Scanned Meal',
-          dishes,
-          mealType: parsed.mealType || 'lunch',
-          confidence: parsed.confidence || 0.88,
-          summary: result.usedBackupModel ? `${baseSummary} (Backup model ${result.resolvedModel})` : baseSummary,
-          analyzedByGemini: true,
-          resolvedModel: result.resolvedModel,
-          usedBackupModel: result.usedBackupModel,
-          ingredients,
-        },
-        200,
-        request,
-        env
-      );
+      return jsonResponse({ error: 'Not found' }, 404, request, env);
+    } catch {
+      return jsonResponse({ error: 'Unable to scan right now. Please try again or log manually.' }, 500, request, env);
     }
-    return jsonResponse({ error: 'Not found' }, 404, request, env);
   },
 };

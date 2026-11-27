@@ -106,9 +106,10 @@
     // Metrics filters & simplified view toggles
     metricsCategory: 'all',
     metricsDirection: 'all',
-    showTechnicalStats: false,
     showMoreLifestyle: false,
+    showTechnicalStats: false,
     showInsightLagChart: false,
+    showAdvancedSettings: false,
     // Insights state
     selectedInsightVarId: null,
     selectedReportId: null,
@@ -560,7 +561,7 @@
 
     const customHtml = data.customVariables.length
       ? `<div class="divider-row" style="margin-top:10px">
-          <div style="font-size:12.5px;font-weight:700;color:var(--text-sec);margin-bottom:6px">Your Custom Variables</div>
+          <div style="font-size:12.5px;font-weight:700;color:var(--text-sec);margin-bottom:6px">Your Custom Triggers</div>
           ${data.customVariables.map((cv) => {
             if (cv.valueType === 'boolean') {
               const chk = Boolean(state.form.customVals[cv.id]);
@@ -692,22 +693,24 @@
     const banner = hasAi
       ? ''
       : `<div class="banner-warn" id="goto-settings-key">
-          <div style="font-size:13px;font-weight:700;color:var(--warning)">✨ AI Vision Not Connected</div>
-          <div style="font-size:11.5px;color:var(--text-sec);margin-top:2px">Preview Mode active. Tap to connect in Settings.</div>
+          <div style="font-size:13px;font-weight:700;color:var(--warning)">✨ Meal Scanner Not Connected</div>
+          <div style="font-size:11.5px;color:var(--text-sec);margin-top:2px">Preview Mode active. Tap to set up in Settings.</div>
         </div>`;
 
     const shortTriggerSub = (ing) => {
-      const fromDishes = (ing.foundIn || '').trim();
-      const grp = (ing.triggerGroup || '').trim();
+      const fromDishes = E.sanitizeShortLabel(ing.foundIn || '', 38);
+      const rawGrp = E.sanitizeShortLabel(ing.triggerGroup || '', 28);
       const nameLower = (ing.name || '').trim().toLowerCase();
       let grpClean = '';
-      if (grp && grp.toLowerCase() !== nameLower) {
-        const parts = grp
+      if (rawGrp && rawGrp.toLowerCase() !== nameLower && !/^none$/i.test(rawGrp)) {
+        const parts = rawGrp
           .split(/[\/,]/)
           .map((p) => p.trim())
           .filter((p) => p && p.toLowerCase() !== nameLower);
-        const concise = (parts.length ? parts.slice(0, 2).join(' · ') : grp).trim();
-        grpClean = concise.length > 26 ? parts[0] || concise.slice(0, 24).trim() : concise;
+        const firstPart = parts[0] || rawGrp;
+        const candidate = parts.length > 1 ? `${parts[0]} · ${parts[1]}` : firstPart;
+        const chosen = candidate.length <= 24 ? candidate : firstPart;
+        grpClean = chosen.length > 24 ? chosen.slice(0, 24).trim() : chosen;
       }
       if (fromDishes && d.dishes && d.dishes.length > 1) {
         return grpClean ? `${grpClean} · ${fromDishes}` : `From: ${fromDishes}`;
@@ -756,7 +759,7 @@
             <h2 class="card-title">Review Ingredients</h2>
             <p class="card-sub">${dishCount > 1 ? `${dishCount} dishes · ` : ''}${activeCnt} ingredient${activeCnt === 1 ? '' : 's'}${triggerCnt ? ` · ${triggerCnt} trigger${triggerCnt > 1 ? 's' : ''}` : ''}</p>
           </div>
-          <span class="badge ${d.analyzedByGemini ? 'badge-primary' : 'badge-neutral'}">${d.analyzedByGemini ? 'AI Scan' : 'Preview'}</span>
+          <span class="badge ${d.analyzedByGemini ? 'badge-primary' : 'badge-neutral'}">${d.analyzedByGemini ? 'Scanned' : 'Preview'}</span>
         </div>
         ${dishCount > 1 ? `<div class="wrap" style="margin-bottom:8px">
           ${d.dishes.map((dn) => `<span class="dish-chip">🍽 ${esc(dn)}</span>`).join('')}
@@ -1081,51 +1084,36 @@
       <section class="card">
         <div class="card-header">
           <div>
-            <h2 class="card-title">Cloudflare Worker Proxy (Zero-Exposure)</h2>
-            <p class="card-sub">Recommended for GitHub Pages: keeps GEMINI_API_KEY &amp; APP_PASSWORD 100% server-side.</p>
+            <h2 class="card-title">Meal Scanner &amp; Account</h2>
+            <p class="card-sub">${proxyUrl || s.geminiApiKey ? 'Meal scanning is connected and ready.' : 'Connect your meal scanner in Advanced Setup below.'}</p>
           </div>
-          <span class="badge ${proxyUrl ? 'badge-protective' : 'badge-neutral'}">${proxyUrl ? 'Proxy Active' : 'Direct Mode'}</span>
+          <span class="badge ${proxyUrl || s.geminiApiKey ? 'badge-protective' : 'badge-neutral'}">${proxyUrl || s.geminiApiKey ? 'Ready' : 'Not Set'}</span>
         </div>
-        <label class="field-label">Cloudflare Worker URL</label>
-        <input class="input" id="set-proxy-url" type="url" value="${esc(proxyUrl)}" placeholder="https://flarelens-gemini-proxy.yourname.workers.dev" />
-        <label class="field-label">Gemini Model (auto-discovers fallback if unavailable)</label>
-        <div class="wrap" style="margin-bottom:10px">
-          ${['gemini-3.8-flash', 'gemini-3.6-flash', 'gemini-flash-latest'].map((m) => `<button class="chip chip-solid ${s.geminiModel === m ? 'active' : ''}" data-set-model="${m}">${m}</button>`).join('')}
+        <div class="row" style="margin-bottom:8px">
+          <button class="btn btn-secondary" id="test-gemini-btn">Test Scanner</button>
+          <button class="btn btn-danger" id="settings-lock-btn">🔒 Lock App</button>
         </div>
-        <div class="row">
-          <button class="btn btn-primary" id="save-proxy-btn">Save Proxy URL</button>
-          <button class="btn btn-secondary" id="test-gemini-btn">Test Connection</button>
-        </div>
-      </section>
-
-      ${proxyUrl ? '' : `
-      <section class="card">
-        <div class="card-header"><div><h2 class="card-title">Direct Gemini API Key (Optional Local Mode)</h2><p class="card-sub">Only needed when not using the Cloudflare Worker proxy. Encrypted with AES-256-GCM locally.</p></div></div>
-        <label class="field-label">Gemini API Key</label>
-        <input class="input" id="set-apikey" type="password" value="${esc(s.geminiApiKey)}" placeholder="AIza..." />
-        <div class="row" style="margin-top:10px">
-          <button class="btn btn-primary" id="save-apikey-btn">Encrypt &amp; Save Key</button>
-        </div>
-      </section>`}
-
-      <section class="card">
-        <div class="card-header">
-          <div>
-            <h2 class="card-title">Security, Password &amp; GitHub Pages</h2>
-            <p class="card-sub">${proxyUrl ? 'Login verified server-side by your Cloudflare Worker with signed 12h session tokens.' : 'Password verified via PBKDF2-SHA256 (200k rounds). API keys encrypted via AES-256-GCM.'}</p>
-          </div>
-          <span class="badge badge-primary">${proxyUrl ? 'Server Auth' : (A.hasWebCrypto() ? 'AES-256-GCM' : 'Local HTTP')}</span>
-        </div>
-        ${proxyUrl ? '' : `
-        <label class="field-label">Change Local Login Password (re-encrypts saved API key)</label>
-        <input class="input" id="chg-pw-cur" type="password" placeholder="Current password" style="margin-bottom:7px" />
-        <input class="input" id="chg-pw-new" type="password" placeholder="New password (min 8 chars)" style="margin-bottom:7px" />
-        <button class="btn btn-secondary" id="change-pw-btn" style="margin-bottom:10px">Update Password</button>`}
-        <div class="row">
-          <button class="btn btn-primary" id="download-authcfg-btn">Download auth-config.js</button>
-          <button class="btn btn-danger" id="settings-lock-btn">🔒 Lock Now</button>
-        </div>
-        <p class="card-sub" style="margin-top:8px">Drop the downloaded <code>auth-config.js</code> into <code>web/auth-config.js</code> before pushing to GitHub Pages (contains zero plaintext secrets).</p>
+        <button type="button" class="details-toggle" id="toggle-advanced-settings">
+          <span>Advanced Connection Settings</span>
+          <span>${state.showAdvancedSettings ? '▴' : '▾'}</span>
+        </button>
+        ${state.showAdvancedSettings ? `
+          <div style="margin-top:10px">
+            <label class="field-label">Scanner Service URL</label>
+            <input class="input" id="set-proxy-url" type="url" value="${esc(proxyUrl)}" placeholder="https://your-service.workers.dev" />
+            <div class="row" style="margin-top:8px">
+              <button class="btn btn-primary" id="save-proxy-btn">Save Service URL</button>
+            </div>
+            ${proxyUrl ? '' : `
+              <label class="field-label" style="margin-top:12px">Direct Access Key (Optional)</label>
+              <input class="input" id="set-apikey" type="password" value="${esc(s.geminiApiKey)}" placeholder="Enter key" />
+              <button class="btn btn-secondary" id="save-apikey-btn" style="margin-top:8px">Save Key</button>
+              <label class="field-label" style="margin-top:12px">Change Login Password</label>
+              <input class="input" id="chg-pw-cur" type="password" placeholder="Current password" style="margin-bottom:7px" />
+              <input class="input" id="chg-pw-new" type="password" placeholder="New password (min 8 chars)" style="margin-bottom:7px" />
+              <button class="btn btn-secondary" id="change-pw-btn">Update Password</button>`}
+            <button class="btn btn-secondary" id="download-authcfg-btn" style="margin-top:10px">Download Config File</button>
+          </div>` : ''}
       </section>
 
       <section class="card">
@@ -1162,7 +1150,7 @@
           </div>
         </div>
         <div class="row" style="margin-top:12px">
-          <button class="btn btn-secondary" id="export-json-btn">Export JSON</button>
+          <button class="btn btn-secondary" id="export-json-btn">Export Backup</button>
           <button class="btn btn-danger" id="clear-data-btn">Clear Personal</button>
         </div>
       </section>`;
@@ -1639,7 +1627,7 @@
     } catch (err) {
       state.foodDraft.analyzing = false;
       state.foodDraft.statusMessage = '';
-      state.foodDraft.errorMessage = err.message || 'Gemini analysis failed. You can retry or log ingredients manually.';
+      state.foodDraft.errorMessage = err.message || 'Unable to scan right now. Please try again or log ingredients manually.';
       state.foodDraft.errorRetriable = Boolean(err?.geminiError?.retriable);
       showToast('Scan failed — retry or log manually');
     }
@@ -1694,6 +1682,8 @@
     if (toggleTechStats) toggleTechStats.addEventListener('click', () => { state.showTechnicalStats = !state.showTechnicalStats; render(); });
     const toggleInsightLag = document.getElementById('toggle-insight-lag-btn');
     if (toggleInsightLag) toggleInsightLag.addEventListener('click', () => { state.showInsightLagChart = !state.showInsightLagChart; render(); });
+    const toggleAdvSettings = document.getElementById('toggle-advanced-settings');
+    if (toggleAdvSettings) toggleAdvSettings.addEventListener('click', () => { state.showAdvancedSettings = !state.showAdvancedSettings; render(); });
 
     const gotoFood = document.getElementById('goto-food-btn');
     if (gotoFood) gotoFood.addEventListener('click', () => { state.activeTab = 'food'; window.scrollTo(0, 0); render(); });
@@ -1845,7 +1835,7 @@
         state.userMeasurements = [...added, ...kept];
         persist();
         const needsSync = shouldAutoSyncLive();
-        showToast(needsSync ? `Saved ${added.length} variables · auto-syncing live metadata…` : `Saved ${added.length} daily variables`);
+        showToast(needsSync ? 'Saved daily habits · updating local weather…' : 'Saved daily habits');
         render();
         if (needsSync) {
           await syncLiveMetadata({ silent: true });
@@ -1925,7 +1915,7 @@
         });
         state.foodDraft = { photoDataUrl: '', photoBase64: '', mimeType: 'image/jpeg', textHint: '', dishName: '', dishes: [], mealType: 'lunch', summary: '', analyzedByGemini: false, confidence: 0, ingredients: [], analyzing: false, statusMessage: '', errorMessage: '', errorRetriable: false };
         persist();
-        showToast(`Logged meal & ${active.length} ingredient variables`);
+        showToast(`Saved meal & ${active.length} ingredient${active.length === 1 ? '' : 's'}`);
         render();
       });
     }
@@ -1967,7 +1957,7 @@
     if (saveProxyBtn) {
       saveProxyBtn.addEventListener('click', () => {
         const url = A.saveLocalProxyUrl(document.getElementById('set-proxy-url').value);
-        showToast(url ? 'Proxy URL saved — lock & sign in with Worker password' : 'Switched back to direct local mode');
+        showToast(url ? 'Connection saved' : 'Connection updated');
         render();
       });
     }
@@ -1975,7 +1965,7 @@
     if (saveKeyBtn) {
       saveKeyBtn.addEventListener('click', async () => {
         await saveEncryptedGeminiKey(document.getElementById('set-apikey').value);
-        showToast('Gemini API key encrypted & saved');
+        showToast('Access key saved');
         render();
       });
     }
@@ -1987,7 +1977,7 @@
         const keyEl = document.getElementById('set-apikey');
         const key = keyEl ? (keyEl.value || '').trim() : state.settings.geminiApiKey;
         if (!proxyUrl && keyEl) await saveEncryptedGeminiKey(key);
-        showToast('Testing Gemini connection…');
+        showToast('Checking meal scanner…');
         const res = await E.testGeminiConnection(key, state.settings.geminiModel, (msg) => showToast(msg), {
           proxyUrl,
           proxyToken: A.getProxyToken(),
@@ -2140,7 +2130,7 @@
     const conns = H.loadConnections();
     const html = `
       <p class="card-sub" style="margin-bottom:12px">
-        Connect or import from <b>Apple Health, WHOOP, Garmin Connect, or Strava</b> to extract <b>sleep quality, sleep duration, HRV, resting heart rate, and exercise minutes</b> directly into your correlation engine.
+        Connect or import from <b>Apple Health, WHOOP, Garmin Connect, or Strava</b> to track <b>sleep quality, sleep duration, HRV, resting heart rate, and exercise</b> alongside your symptoms.
       </p>
       ${H.PROVIDERS.map((p) => {
         const st = conns[p.id];

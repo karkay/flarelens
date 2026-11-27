@@ -114,8 +114,8 @@
       title: 'Multi-Issue Hub & Quick Check-In',
       subtitle: 'Step 2 of 6 · Home landing page',
       body:
-        'Track multiple conditions side by side! Tap 0–10 on any condition card and hit "Log All" to save multiple issues at once (with automatic live weather, humidity & pollen sync), or tap "+ Add Condition" to track anything else like migraines, bloating, or joint pain.',
-      tip: 'Log both calm days (0–2) and flare days (6–10). Calm days give the correlation engine your baseline!',
+        'Track multiple conditions side by side! Tap Clear, Mild, Moderate, or Severe on each condition and save once (local weather, humidity & pollen update automatically), or tap "+ Add Issue" to track anything else like migraines, bloating, or joint pain.',
+      tip: 'Log both calm days and flare days—calm days help FlareLens learn your personal baseline!',
     },
     {
       tab: 'today',
@@ -123,26 +123,26 @@
       title: 'Connect Health & Fitness Apps',
       subtitle: 'Step 3 of 6 · Apple Health, WHOOP, Garmin & Strava',
       body:
-        'Tap "Connect Health Apps" on Today or Settings to extract sleep duration, sleep quality, HRV, resting heart rate, and exercise minutes directly from WHOOP / Strava APIs or Apple Health / Garmin export files.',
-      tip: 'Sleep quality and HRV drops often show up 24–48 hours before a visible skin flare.',
+        'Tap "Apps" on Home or Settings to bring in sleep, HRV, resting heart rate, and workouts from Apple Health, WHOOP, Garmin, or Strava.',
+      tip: 'Sleep quality and recovery drops often show up 1–2 days before a visible flare.',
     },
     {
       tab: 'food',
       icon: '📷',
-      title: 'Gemini Food Lens',
+      title: 'Food Lens',
       subtitle: 'Step 4 of 6 · Food Lens tab',
       body:
-        'Snap a photo of any meal or beverage (or describe it). Gemini identifies the dish and breaks out typical & hidden ingredients—like Dairy, Wheat/Gluten, Nightshades, Eggs, and Soy—turning each ingredient into a timestamped variable.',
-      tip: 'You can tap ingredients to toggle them on/off or add missing ones before logging.',
+        'Snap a photo or list multiple dishes you ate. FlareLens pulls out typical and hidden ingredients—like Dairy, Gluten, Shellfish, Nightshades, Eggs, and Soy—so you can track them automatically.',
+      tip: 'You can tap any ingredient to include or exclude it, or add missing ones before saving.',
     },
     {
       tab: 'metrics',
       icon: '📊',
-      title: 'Reading Metrics & Correlation (r)',
+      title: 'Your Triggers & What Helps',
       subtitle: 'Step 5 of 6 · Metrics tab',
       body:
-        'Every variable is ranked by correlation strength (r from -1.0 to +1.0). Positive (+r) values are suspected triggers; negative (-r) values are protective factors (like good sleep or higher humidity). The 6 mini bars show whether a trigger acts immediately (0d), delayed (1d–3d), or via multi-day build-up (3d/5d Sum).',
-      tip: 'Look for the ⓘ info icons anywhere in Metrics or Insights to view plain-English definitions of r, p-value, lag, and build-up.',
+        'See your suspected triggers and protective habits ranked in plain English, along with whether each reacts same-day, 1–3 days later, or after building up over several days.',
+      tip: 'Want the numbers? Toggle "Show Technical Stats" anytime to view exact scores and explanations.',
     },
     {
       tab: 'insights',
