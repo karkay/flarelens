@@ -687,106 +687,126 @@
 
   function renderFood(data) {
     const d = state.foodDraft;
-    const proxyUrl = A.getProxyUrl();
-    const banner = proxyUrl
-      ? `<div class="banner-ok">🛡️ Secure Server Proxy active (${esc(state.settings.geminiModel)}) · API key never exposed to browser</div>`
-      : state.settings.geminiApiKey
-      ? `<div class="banner-ok">✓ Live Gemini Vision active (${esc(state.settings.geminiModel)})</div>`
+    const hasAi = Boolean(A.getProxyUrl() || state.settings.geminiApiKey);
+    const banner = hasAi
+      ? ''
       : `<div class="banner-warn" id="goto-settings-key">
-          <div style="font-size:13px;font-weight:700;color:var(--warning)">✨ Gemini Vision Not Configured</div>
-          <div style="font-size:11.5px;color:var(--text-sec);margin-top:2px">Preview Mode active. Tap to connect your Cloudflare Worker Proxy (recommended) or Gemini API key in Settings.</div>
+          <div style="font-size:13px;font-weight:700;color:var(--warning)">✨ AI Vision Not Connected</div>
+          <div style="font-size:11.5px;color:var(--text-sec);margin-top:2px">Preview Mode active. Tap to connect in Settings.</div>
         </div>`;
+
+    const shortTriggerSub = (ing) => {
+      const grp = (ing.triggerGroup || '').trim();
+      if (!grp) return '';
+      const nameLower = (ing.name || '').trim().toLowerCase();
+      if (grp.toLowerCase() === nameLower) return '';
+      const parts = grp
+        .split(/[\/,]/)
+        .map((p) => p.trim())
+        .filter((p) => p && p.toLowerCase() !== nameLower);
+      const concise = (parts.length ? parts.slice(0, 2).join(' · ') : grp).trim();
+      return concise.length > 28 ? parts[0] || concise.slice(0, 26).trim() : concise;
+    };
 
     let draftHtml = '';
     if (d.analyzing) {
       draftHtml = `<section class="card" style="text-align:center;padding:22px">
-        <div style="font-weight:700;color:var(--primary-dark)">✨ ${esc(d.statusMessage || 'Asking Gemini for ingredients…')}</div>
-        <p class="card-sub" style="margin-top:6px">Automatic retry & backup model failover active if Gemini experiences temporary high demand.</p>
+        <div style="font-weight:700;color:var(--primary-dark)">✨ Analyzing your meal…</div>
+        <p class="card-sub" style="margin-top:6px">Identifying ingredients and common triggers.</p>
       </section>`;
     } else if (d.errorMessage) {
       draftHtml = `<section class="card" style="border-color:#F3D299;background:var(--warning-light)">
-        <div style="font-size:14px;font-weight:800;color:var(--warning);margin-bottom:4px">⚠️ Gemini Temporarily Unavailable</div>
+        <div style="font-size:14px;font-weight:800;color:var(--warning);margin-bottom:4px">⚠️ Couldn't Analyze Right Now</div>
         <p class="card-sub" style="color:var(--text);margin-bottom:12px">${esc(d.errorMessage)}</p>
         <div class="row">
-          <button class="btn btn-primary" id="retry-food-btn">↻ Retry Gemini</button>
+          <button class="btn btn-primary" id="retry-food-btn">↻ Try Again</button>
           <button class="btn btn-secondary" id="manual-fallback-btn">Log Manually</button>
         </div>
       </section>`;
     } else if (d.ingredients.length) {
-      const mealTypes = ['breakfast', 'lunch', 'dinner', 'snack', 'beverage'];
+      const mealTypes = [
+        ['breakfast', 'Breakfast'],
+        ['lunch', 'Lunch'],
+        ['dinner', 'Dinner'],
+        ['snack', 'Snack'],
+        ['beverage', 'Drink'],
+      ];
       const activeCnt = d.ingredients.filter((i) => i.included).length;
+      const triggerCnt = d.ingredients.filter((i) => i.included && i.commonEczemaTrigger).length;
       draftHtml = `<section class="card">
-        <div class="card-header">
-          <div><h2 class="card-title">Detected Ingredients</h2><p class="card-sub">${esc(d.summary)}</p></div>
-          <span class="badge ${d.analyzedByGemini ? 'badge-primary' : 'badge-warning'}">${d.analyzedByGemini ? 'Gemini AI' : 'Preview'}</span>
+        <div class="card-header" style="margin-bottom:8px">
+          <div>
+            <h2 class="card-title">Review Ingredients</h2>
+            <p class="card-sub">${activeCnt} selected${triggerCnt ? ` · ${triggerCnt} common trigger${triggerCnt > 1 ? 's' : ''}` : ''}</p>
+          </div>
+          <span class="badge ${d.analyzedByGemini ? 'badge-primary' : 'badge-neutral'}">${d.analyzedByGemini ? 'AI Scan' : 'Preview'}</span>
         </div>
-        <label class="field-label">Food / Beverage Name</label>
+        <label class="field-label">Meal Name</label>
         <input class="input" id="draft-dish" value="${esc(d.dishName)}" />
-        <label class="field-label">Meal Category</label>
+        <label class="field-label">Meal Type</label>
         <div class="wrap" style="margin-bottom:10px">
-          ${mealTypes.map((m) => `<button class="chip chip-solid ${d.mealType === m ? 'active' : ''}" data-meal-type="${m}">${m[0].toUpperCase() + m.slice(1)}</button>`).join('')}
+          ${mealTypes.map(([m, lbl]) => `<button class="chip chip-solid ${d.mealType === m ? 'active' : ''}" data-meal-type="${m}">${lbl}</button>`).join('')}
         </div>
-        <div style="font-size:11.5px;color:var(--text-sec);margin-bottom:8px">Tap ingredients to include/exclude. Each checked ingredient becomes a trackable correlation variable.</div>
-        ${d.ingredients.map((ing) => `
-          <div class="ing-row ${ing.included ? '' : 'excluded'}" data-toggle-ing="${ing.id}">
-            <span style="font-size:16px">${ing.included ? '☑' : '☐'}</span>
-            <div style="flex:1">
-              <div class="wrap" style="align-items:center">
-                <b style="font-size:13.5px;${ing.included ? '' : 'text-decoration:line-through'}">${esc(ing.name)}</b>
-                ${ing.commonEczemaTrigger ? `<span class="badge badge-warning">${esc(ing.triggerGroup || 'Common Trigger')}</span>` : ''}
-              </div>
-              ${ing.notes ? `<div style="font-size:11.5px;color:var(--text-sec);margin-top:2px">${esc(ing.notes)}</div>` : ''}
+        <div style="font-size:11.5px;color:var(--text-muted);margin-bottom:8px">Tap any ingredient to include or exclude:</div>
+        ${d.ingredients.map((ing) => {
+          const sub = shortTriggerSub(ing);
+          return `<div class="ing-row ${ing.included ? '' : 'excluded'}" data-toggle-ing="${ing.id}">
+            <span class="ing-check ${ing.included ? 'checked' : ''}">${ing.included ? '✓' : ''}</span>
+            <div class="ing-main">
+              <div class="ing-name">${esc(ing.name)}</div>
+              ${sub ? `<div class="ing-sub">${esc(sub)}</div>` : ''}
             </div>
-          </div>`).join('')}
+            ${ing.commonEczemaTrigger ? `<span class="ing-flag">⚠ Trigger</span>` : ''}
+          </div>`;
+        }).join('')}
         <div class="row" style="margin-top:10px">
-          <input class="input" id="add-ing-input" placeholder="Add missing ingredient (e.g. Oat Milk)" />
-          <button class="btn btn-primary btn-sm" id="add-ing-btn" style="padding:10px 14px;border-radius:11px">+</button>
+          <input class="input" id="add-ing-input" placeholder="Add ingredient (e.g. Oat Milk)" />
+          <button class="btn btn-secondary btn-sm" id="add-ing-btn" style="padding:11px 14px;border-radius:11px">+ Add</button>
         </div>
-        <button class="btn btn-primary" id="save-meal-btn" style="margin-top:12px">✓ Log Meal & ${activeCnt} Ingredient Variables</button>
+        <button class="btn btn-primary" id="save-meal-btn" style="margin-top:12px">✓ Save Meal (${activeCnt} ingredient${activeCnt === 1 ? '' : 's'})</button>
       </section>`;
     }
 
     return `
       ${banner}
       <section class="card">
-        <div class="card-header">
+        <div class="card-header" style="margin-bottom:10px">
           <div>
-            <h2 class="card-title">Scan Food or Beverage</h2>
-            <p class="card-sub">Snap a photo with your phone camera — Gemini identifies the meal and its typical ingredients.</p>
+            <h2 class="card-title">Scan a Meal</h2>
+            <p class="card-sub">Snap a photo or type what you ate to log ingredients.</p>
           </div>
         </div>
-        <div class="row" style="margin-bottom:10px">
-          <label class="btn btn-primary" style="flex:1;cursor:pointer">
+        <div class="food-capture-grid">
+          <label class="food-capture-btn btn-primary">
             📷 Take Photo
             <input type="file" accept="image/*" capture="environment" id="camera-input" style="display:none" />
           </label>
-          <label class="btn btn-secondary" style="flex:1;cursor:pointer">
+          <label class="food-capture-btn btn-secondary">
             🖼 Library
             <input type="file" accept="image/*" id="library-input" style="display:none" />
           </label>
         </div>
         ${d.photoDataUrl ? `<img src="${d.photoDataUrl}" class="photo-preview" alt="Meal preview" />` : ''}
         <div class="row">
-          <input class="input" id="food-hint-input" value="${esc(d.textHint)}" placeholder="Or describe food/drink (e.g. iced latte, tomato pasta)" />
-          <button class="btn btn-primary btn-sm" id="analyze-food-btn" style="padding:11px 13px;border-radius:11px">✨ Analyze</button>
+          <input class="input" id="food-hint-input" value="${esc(d.textHint)}" placeholder="Or type food (e.g. iced latte, pasta)" />
+          <button class="btn btn-primary btn-sm" id="analyze-food-btn" style="padding:11px 14px;border-radius:11px">✨ Scan</button>
         </div>
       </section>
 
       ${draftHtml}
 
       <section class="card">
-        <div class="card-header"><div><h2 class="card-title">Recent Meals & Ingredients (${data.foodEntries.length})</h2></div></div>
-        ${data.foodEntries.slice(0, 12).map((f) => `
+        <div class="card-header" style="margin-bottom:6px"><div><h2 class="card-title">Recent Meals (${data.foodEntries.length})</h2></div></div>
+        ${data.foodEntries.slice(0, 10).map((f) => `
           <div class="divider-row">
-            <div class="row-between">
-              <div>
-                <div style="font-weight:700;font-size:14px">${esc(f.dishName)}</div>
-                <div style="font-size:11px;color:var(--text-muted)">${f.mealType.toUpperCase()} · ${new Date(f.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
+            <div class="row-between" style="align-items:flex-start">
+              <div style="flex:1;min-width:0">
+                <div style="font-weight:700;font-size:14px;overflow-wrap:anywhere">${esc(f.dishName)}</div>
+                <div style="font-size:11px;color:var(--text-muted)">${f.mealType[0].toUpperCase() + f.mealType.slice(1)} · ${new Date(f.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</div>
               </div>
-              <span class="badge ${f.analyzedByGemini ? 'badge-primary' : 'badge-neutral'}">${f.analyzedByGemini ? 'Gemini AI' : 'Manual'}</span>
             </div>
             <div class="wrap" style="margin-top:7px">
-              ${f.ingredients.map((ing) => `<span class="badge ${ing.commonEczemaTrigger ? 'badge-warning' : 'badge-neutral'}">${esc(ing.name)}</span>`).join('')}
+              ${f.ingredients.map((ing) => `<span class="meal-ing-pill ${ing.commonEczemaTrigger ? 'is-trigger' : ''}">${ing.commonEczemaTrigger ? '⚠ ' : ''}${esc(ing.name)}</span>`).join('')}
             </div>
           </div>`).join('') || '<p class="card-sub">No meals logged yet.</p>'}
       </section>`;
@@ -1478,11 +1498,11 @@
     const data = getActiveData();
 
     const titles = {
-      today: ['FlareLens · Home', 'Track multiple health issues & daily triggers'],
-      food: ['Gemini Food Lens', 'Snap a meal photo to correlate ingredients across all conditions'],
-      metrics: [`${data.activeCondition.icon} ${data.activeCondition.name} Metrics`, 'Immediate, delayed & multi-day build-up correlations'],
-      insights: [`${data.activeCondition.icon} ${data.activeCondition.name} Insights`, 'Scheduled 9:00 AM & 9:00 PM reports & flare graphs'],
-      settings: ['Settings & Schedule', 'Conditions, health apps, proxy & schedule controls'],
+      today: ['FlareLens', 'Daily check-ins & triggers'],
+      food: ['Food Lens', 'Snap a meal to log ingredients'],
+      metrics: [`${data.activeCondition.icon} ${data.activeCondition.name}`, 'Triggers & what helps'],
+      insights: [`${data.activeCondition.icon} ${data.activeCondition.name}`, 'Daily reports & patterns'],
+      settings: ['Settings', 'Conditions, apps & schedule'],
     };
     document.getElementById('header-title').textContent = titles[state.activeTab][0];
     document.getElementById('header-sub').textContent = titles[state.activeTab][1];
@@ -1634,7 +1654,7 @@
     if (toggleInsightLag) toggleInsightLag.addEventListener('click', () => { state.showInsightLagChart = !state.showInsightLagChart; render(); });
 
     const gotoFood = document.getElementById('goto-food-btn');
-    if (gotoFood) gotoFood.addEventListener('click', () => { state.activeTab = 'food'; render(); });
+    if (gotoFood) gotoFood.addEventListener('click', () => { state.activeTab = 'food'; window.scrollTo(0, 0); render(); });
 
     async function syncLiveMetadata({ silent = false } = {}) {
       if (state.syncingSensors) return null;
